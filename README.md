@@ -5,15 +5,15 @@
 > ```text
 > Set up and run the private hiddenjob repository as my personal job-discovery and application assistant.
 >
-> I will provide my resume and any profile details you need in this private Muse conversation. Create `config/profile.json` from the repository example and keep it, captured postings, application materials, screenshots, cookies, credentials, and case records out of Git. Never use someone else's profile or resume.
+> I will provide my resume and any profile details you need in this private Muse conversation. Create `config/profile.json` and `config/automation.json` from the repository examples. Keep both files, captured postings, application materials, screenshots, cookies, credentials, and case records out of Git. Never use someone else's profile or resume.
 >
 > First read `README.md`, `MUSE_SETUP_PROMPT.md`, and `skills/hiddenjob/SKILL.md`. Discover postings from publisher-declared robots.txt and sitemaps, capture source evidence, and describe results neutrally. A posting may be less visible or poorly indexed; do not claim a company intentionally hid it without direct evidence. Treat blocked or incomplete sources as unmeasurable, not empty.
 >
-> Use my resume to rank opportunities and explain why each is a reasonable fit. Keep LCA-like notices separate from roles that appear open for applications. Run the discovery, evidence capture, ranking, staging, and follow-up tracking automatically.
+> Use my resume to rank opportunities and explain why each is a reasonable fit. Keep LCA-like notices separate from roles that appear open for applications. Run the discovery, evidence capture, ranking, staging, ATS prefill, status tracking, and follow-up reminders automatically.
 >
-> Start in review-first mode: prefill applications only after I approve the staged jobs, stop for any account creation, password, CAPTCHA, or unclear question, and record `submitted` only after the employer's confirmation page.
+> Use the hands-off-with-final-approval policy in `config/automation.json`. Do not interrupt me for routine local work, source research, evidence capture, ranking, staging, or ATS prefill after I grant Muse the relevant task/site access. Batch every qualified, staged application and send me one final approval request listing the employers, roles, and application count before submission. Record `submitted` only after each employer's confirmation page.
 >
-> If I explicitly say “enable bounded auto-submit,” ask me to confirm the maximum number of applications per run and the eligibility rules. Only then set the project-local `HIDDENJOB_AUTOSUBMIT=1` environment gate and use `apply-staged --submit --confirm-submit --limit N` for already-staged jobs that meet those rules. Do not send email, make public claims, file an EEOC/OFCCP complaint, or override an employer form's question without a separate explicit instruction.
+> Once I approve a batch, set the project-local `HIDDENJOB_AUTOSUBMIT=1` environment gate and use `apply-staged --submit --confirm-submit --limit N` for the already-staged jobs in that approved batch. Stop for any account creation, password, one-time code, CAPTCHA, unclear employer question, missing evidence, missing confirmation page, email/message, public statement, agency complaint, payment, or acceptance of terms. Do not try to bypass Muse's approval system; I control persistent task/site approvals in Muse and final submission approval.
 >
 > For possible discrimination concerns, centralize evidence in the local draft-case ledger, distinguish EEOC from DOL OFCCP routing, verify the current official agency instructions and deadline, and make clear that a draft is not filed.
 > ```

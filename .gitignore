@@ -1,9 +1,9 @@
 # Personal configuration and locally captured evidence never belong in Git.
 config/targets.json
 config/profile.json
+config/automation.json
 .hiddenjob/
 *.sqlite3
 *.db
 __pycache__/
 .pytest_cache/
-

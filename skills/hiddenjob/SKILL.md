@@ -13,11 +13,11 @@ Find postings that a person might otherwise miss because of sitemap structure, o
 
 ## Required workflow
 
-1. Initialize a private local configuration: `python3 hiddenjob.py init`, then edit `config/targets.json`. Keep profile and data files out of Git.
+1. Initialize a private local configuration: `python3 hiddenjob.py init`, then edit `config/targets.json` and copy `config/automation.example.json` to ignored `config/automation.json`. Keep profile and data files out of Git.
 2. Discover from the publisher's `robots.txt` and sitemap first. Preserve the three outcomes: found, no declared relevant URL, or unmeasurable/blocked. Never convert a blocked result into a negative claim.
 3. Run `python3 hiddenjob.py sync --limit 25`, inspect the captured records with `python3 hiddenjob.py jobs`, and open the saved source copy before staging an application.
-4. Use the person's private resume and profile only in their private workspace to rank and stage jobs. Never put that data, evidence, or application materials in Git. The optional `apply` adapter uses the local profile to prefill an ATS form and stops for review by default.
-5. A person may choose bounded automatic submission only by explicitly enabling it, stating a maximum applications-per-run cap and eligibility rules, then setting `HIDDENJOB_AUTOSUBMIT=1`. It still needs `--submit` and `--confirm-submit`; account creation, passwords, and CAPTCHAs are always human-only. Record `submitted` only after a real confirmation page. Keep every material claim tied to a captured source and time.
+4. Use the person's private resume and profile only in their private workspace to rank and stage jobs. Never put that data, evidence, or application materials in Git. With the `hands_off_with_final_approval` policy, automate routine discovery, evidence capture, ranking, staging, prefill, tracking, and reminders after the person chooses Muse task/site permissions.
+5. Before a batch can submit, show the person its employer/role list, eligibility rules, and cap, then request one final approval. Only after it is approved set `HIDDENJOB_AUTOSUBMIT=1` and use `--submit --confirm-submit`. Account creation, passwords, one-time codes, CAPTCHAs, unclear questions, email, complaints, payments, and terms acceptance are always human-only. Muse cannot approve its own permission requests. Record `submitted` only after a real confirmation page. Keep every material claim tied to a captured source and time.
 
 For repeatable processing, use `python3 hiddenjob.py apply-staged --limit N` only after the user has reviewed and staged each record. It runs the same prefill-by-default adapter and does not broaden submission authority.
 

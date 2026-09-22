@@ -1,0 +1,26 @@
+{
+  "mode": "hands_off_with_final_approval",
+  "routine_work": [
+    "read_local_workspace",
+    "discover_postings",
+    "capture_source_evidence",
+    "rank_against_private_resume",
+    "stage_qualified_jobs",
+    "prefill_ats_forms",
+    "track_application_outcomes",
+    "prepare_follow_up_reminders"
+  ],
+  "submission": {
+    "requires_final_user_approval": true,
+    "maximum_applications_per_batch": 5,
+    "confirmation_required": true
+  },
+  "always_human_only": [
+    "create_or_log_into_accounts",
+    "enter_passwords_or_one_time_codes",
+    "solve_captchas",
+    "send_email_or_messages",
+    "file_eeoc_or_ofccp_complaints",
+    "make_payments_or_accept_terms"
+  ]
+}
