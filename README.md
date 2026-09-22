@@ -1,5 +1,29 @@
 # hiddenjob
 
+> ## Give this prompt to Muse
+>
+> ```text
+> Set up and run the private hiddenjob repository as my personal job-discovery and application assistant.
+>
+> I will provide my resume and any profile details you need in this private Muse conversation. Create `config/profile.json` from the repository example and keep it, captured postings, application materials, screenshots, cookies, credentials, and case records out of Git. Never use someone else's profile or resume.
+>
+> First read `README.md`, `MUSE_SETUP_PROMPT.md`, and `skills/hiddenjob/SKILL.md`. Discover postings from publisher-declared robots.txt and sitemaps, capture source evidence, and describe results neutrally. A posting may be less visible or poorly indexed; do not claim a company intentionally hid it without direct evidence. Treat blocked or incomplete sources as unmeasurable, not empty.
+>
+> Use my resume to rank opportunities and explain why each is a reasonable fit. Keep LCA-like notices separate from roles that appear open for applications. Run the discovery, evidence capture, ranking, staging, and follow-up tracking automatically.
+>
+> Start in review-first mode: prefill applications only after I approve the staged jobs, stop for any account creation, password, CAPTCHA, or unclear question, and record `submitted` only after the employer's confirmation page.
+>
+> If I explicitly say “enable bounded auto-submit,” ask me to confirm the maximum number of applications per run and the eligibility rules. Only then set the project-local `HIDDENJOB_AUTOSUBMIT=1` environment gate and use `apply-staged --submit --confirm-submit --limit N` for already-staged jobs that meet those rules. Do not send email, make public claims, file an EEOC/OFCCP complaint, or override an employer form's question without a separate explicit instruction.
+>
+> For possible discrimination concerns, centralize evidence in the local draft-case ledger, distinguish EEOC from DOL OFCCP routing, verify the current official agency instructions and deadline, and make clear that a draft is not filed.
+> ```
+>
+> ### Muse invitation
+>
+> Check out [Muse, your personal AI agent](https://muse.ai/join). Redeem this code in **Settings** within 48 hours of joining and we'll both get **1 billion Muse tokens**:
+>
+> Code: `FJBMD8`
+
 `hiddenjob` is a private, configuration-first toolkit for discovering job postings that are easy to miss, preserving the source evidence, and organizing a review-first application and accountability ledger.
 
 It starts from publisher-declared `robots.txt` and sitemap URLs rather than relying only on a site's search box. That can surface job pages with opaque URLs, weak indexing, or a separate careers system. It does **not** infer that a company intentionally concealed a job.
@@ -79,7 +103,7 @@ This is organizational support, not legal advice or a filing service. See [the r
 
 ## Muse handoff
 
-For a configured Muse agent, use the reviewed prompt in [MUSE_SETUP_PROMPT.md](MUSE_SETUP_PROMPT.md). It keeps the agent inside the private workspace and prohibits autonomous submissions, messages, or filings.
+The copy-ready prompt above is the fastest setup path. The fuller operational handoff is in [MUSE_SETUP_PROMPT.md](MUSE_SETUP_PROMPT.md): it accepts the person's private resume/profile, automates discovery and preparation, and supports limited auto-submit only after that person explicitly chooses the mode and its cap.
 
 ## Privacy boundary
 

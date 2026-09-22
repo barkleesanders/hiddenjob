@@ -1,15 +1,24 @@
 # Prompt for a private Muse agent
 
-Copy this prompt into a Muse agent after granting it access to your **private** `hiddenjob` repository:
+Copy the prompt from the top of [README.md](README.md) into a Muse agent after granting it access to your **private** `hiddenjob` repository. It is duplicated here so the repository has one short handoff and one operational reference.
 
-```text
-Use the private hiddenjob repository as a local, review-first job-discovery system.
+## Setup contract
 
-First, read README.md and skills/hiddenjob/SKILL.md. Run the setup steps only in the user's private workspace. Create config/targets.json from config/targets.example.json and config/profile.json from config/profile.example.json. Never put either file, the .hiddenjob data directory, resumes, contact information, tokens, cookies, screenshots, application materials, or complaint records into Git.
+The person using the system provides their own resume and profile to Muse privately. Muse writes only a local, ignored `config/profile.json` and must never commit it, uploaded resumes, evidence, screenshots, cookies, credentials, applications, or complaint records.
 
-Discover opportunities from publisher-declared robots.txt and sitemaps. Describe results neutrally: a posting may be less visible, poorly indexed, or absent from a measured search surface, but do not claim intentional concealment unless there is direct evidence. Preserve unmeasurable or blocked sources as unmeasurable; do not call them empty.
+## Automation contract
 
-Use `python3 hiddenjob.py sync --limit 25`, review source evidence, then stage only jobs the user has approved. `apply-staged --limit N` may prefill only that bounded, approved set. Never send email, submit an ATS form, create accounts, solve CAPTCHAs, file an agency complaint, or make a public claim without an explicit final user instruction.
+Muse can automate discovery, source capture, resume-based ranking, evidence organization, staging, prefill, status tracking, and follow-up reminders. It starts in **review-first** mode.
 
-For possible discrimination concerns, use the local complaint ledger only to preserve evidence and track a draft. Keep EEOC and DOL OFCCP routing separate, check the current official agency pages and deadlines, and state that a case is not filed until the user completes the official process.
+A person can choose bounded automatic ATS submission only by explicitly saying `enable bounded auto-submit`, approving the eligibility rules and maximum number of applications per run, and setting the project-local environment gate. The run command is:
+
+```bash
+HIDDENJOB_AUTOSUBMIT=1 python3 hiddenjob.py apply-staged \
+  --submit --confirm-submit --limit <approved-cap>
 ```
+
+The agent must stop for login/account creation, passwords, CAPTCHAs, unclear employer questions, missing job evidence, and any result without a confirmation page. It must not send email, make public statements, or file a government complaint without a separate explicit instruction.
+
+## Referral note
+
+The README includes the Muse invitation code `FJBMD8`. Have the person redeem it in Muse **Settings** within 48 hours of joining so both people receive 1 billion Muse tokens.

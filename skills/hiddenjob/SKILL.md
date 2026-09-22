@@ -16,8 +16,8 @@ Find postings that a person might otherwise miss because of sitemap structure, o
 1. Initialize a private local configuration: `python3 hiddenjob.py init`, then edit `config/targets.json`. Keep profile and data files out of Git.
 2. Discover from the publisher's `robots.txt` and sitemap first. Preserve the three outcomes: found, no declared relevant URL, or unmeasurable/blocked. Never convert a blocked result into a negative claim.
 3. Run `python3 hiddenjob.py sync --limit 25`, inspect the captured records with `python3 hiddenjob.py jobs`, and open the saved source copy before staging an application.
-4. Stage only reviewed records: `python3 hiddenjob.py stage <url> --note 'why this is a fit'`. The optional `apply` adapter uses a private local profile to prefill an ATS form and stops for review by default.
-5. Do not request browser submission unless the user explicitly asks at the final step. It needs `--submit`, `--confirm-submit`, and `HIDDENJOB_AUTOSUBMIT=1`; account creation, passwords, and CAPTCHAs are always human-only. Record `submitted` only after a real confirmation page. Keep every material claim tied to a captured source and time.
+4. Use the person's private resume and profile only in their private workspace to rank and stage jobs. Never put that data, evidence, or application materials in Git. The optional `apply` adapter uses the local profile to prefill an ATS form and stops for review by default.
+5. A person may choose bounded automatic submission only by explicitly enabling it, stating a maximum applications-per-run cap and eligibility rules, then setting `HIDDENJOB_AUTOSUBMIT=1`. It still needs `--submit` and `--confirm-submit`; account creation, passwords, and CAPTCHAs are always human-only. Record `submitted` only after a real confirmation page. Keep every material claim tied to a captured source and time.
 
 For repeatable processing, use `python3 hiddenjob.py apply-staged --limit N` only after the user has reviewed and staged each record. It runs the same prefill-by-default adapter and does not broaden submission authority.
 
