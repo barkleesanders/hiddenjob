@@ -174,6 +174,94 @@ def config_path(value: str) -> Path:
     return Path(value).expanduser().resolve()
 
 
+def is_http_url(value: object) -> bool:
+    """Accept only absolute HTTP(S) URLs from configuration or imported lists."""
+    if not isinstance(value, str):
+        return False
+    parsed = urllib.parse.urlparse(value.strip())
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def unique_urls(urls: list[str]) -> list[str]:
+    """Preserve input order while avoiding repeated evidence captures."""
+    return list(dict.fromkeys(urls))
+
+
+def urls_from_records(records: object, label: str) -> list[str]:
+    """Extract URLs from strings or records, including hiddenjobs JSONL records."""
+    if isinstance(records, dict):
+        records = records.get("urls") if "urls" in records else [records]
+    if isinstance(records, str):
+        records = [records]
+    if not isinstance(records, list):
+        raise SystemExit(f"{label} must contain URL strings or objects with a url field.")
+    urls: list[str] = []
+    for index, record in enumerate(records, start=1):
+        value = record.get("url") if isinstance(record, dict) else record
+        if not is_http_url(value):
+            raise SystemExit(f"{label} entry {index} is not an absolute HTTP(S) URL.")
+        urls.append(str(value).strip())
+    return unique_urls(urls)
+
+
+def read_url_list(path: Path) -> list[str]:
+    """Read JSON, JSONL, or one-URL-per-line imports without retaining other data."""
+    if not path.exists():
+        raise SystemExit(f"URL list not found: {path}")
+    content = path.read_text().strip()
+    if not content:
+        return []
+    try:
+        return urls_from_records(json.loads(content), str(path))
+    except json.JSONDecodeError:
+        pass
+
+    lines = [line.strip() for line in content.splitlines() if line.strip() and not line.lstrip().startswith("#")]
+    if lines and all(line.startswith("{") for line in lines):
+        try:
+            return urls_from_records([json.loads(line) for line in lines], str(path))
+        except json.JSONDecodeError as exc:
+            raise SystemExit(f"Invalid JSONL in {path}: {exc}") from exc
+    return urls_from_records(lines, str(path))
+
+
+def config_relative_path(value: object, cfg_path: Path, label: str) -> Path:
+    if not isinstance(value, str) or not value.strip():
+        raise SystemExit(f"{label} must be a non-empty file path.")
+    path = Path(value).expanduser()
+    return (path if path.is_absolute() else cfg_path.parent / path).resolve()
+
+
+def source_direct_urls(source: dict[str, object], cfg_path: Path) -> list[str]:
+    urls: list[str] = []
+    if "urls" in source:
+        urls.extend(urls_from_records(source["urls"], f"{source.get('name', 'source')}.urls"))
+    if "url_list_file" in source:
+        urls.extend(read_url_list(config_relative_path(source["url_list_file"], cfg_path, "url_list_file")))
+    return unique_urls(urls)
+
+
+def source_sitemap_seeds(source: dict[str, object], cfg_path: Path) -> list[str]:
+    """Read optional explicit sitemap URLs; they supplement robots discovery."""
+    if "sitemap_urls" not in source:
+        return []
+    return urls_from_records(source["sitemap_urls"], f"{source.get('name', 'source')}.sitemap_urls")
+
+
+def sitemap_candidates(urls: list[str], source: dict[str, object]) -> list[str]:
+    pattern = source.get("job_url_pattern")
+    candidate_re = source.get("job_url_regex")
+    candidates = []
+    for url in urls:
+        path = urllib.parse.urlparse(url).path
+        if pattern and str(pattern) not in path:
+            continue
+        if candidate_re and not re.search(str(candidate_re), path):
+            continue
+        candidates.append(url)
+    return unique_urls(candidates)
+
+
 def load_config(path: Path) -> dict[str, object]:
     if not path.exists():
         raise SystemExit(f"Config not found: {path}. Copy config/targets.example.json to config/targets.json first.")
@@ -244,18 +332,26 @@ def cmd_sync(args: argparse.Namespace) -> int:
     root = data_root(cfg, cfg_path)
     con = database(root)
     for source in cfg["sources"]:
-        if not isinstance(source, dict) or not all(k in source for k in ("name", "robots_url", "sitemap_fallback", "job_url_pattern")):
-            raise SystemExit("Every source needs name, robots_url, sitemap_fallback, and job_url_pattern.")
+        if not isinstance(source, dict) or not isinstance(source.get("name"), str) or not source["name"].strip():
+            raise SystemExit("Every source needs a non-empty name.")
         name = str(source["name"])
-        try:
-            seeds = robots_sitemaps(str(source["robots_url"]), str(source["sitemap_fallback"]))
-            urls, blocked = walk_sitemaps(seeds, args.max_sitemap_urls)
-        except FetchBlocked as exc:
-            print(f"{name}: blocked; inventory unchanged: {exc}", file=sys.stderr)
-            continue
-        candidate_re = source.get("job_url_regex")
-        candidates = [u for u in urls if str(source["job_url_pattern"]) in urllib.parse.urlparse(u).path and
-                      (not candidate_re or re.search(str(candidate_re), urllib.parse.urlparse(u).path))]
+        direct_urls = source_direct_urls(source, cfg_path)
+        seeds = source_sitemap_seeds(source, cfg_path)
+        blocked: list[str] = []
+        if "robots_url" in source:
+            if "sitemap_fallback" not in source:
+                raise SystemExit(f"{name}: robots_url requires sitemap_fallback.")
+            if not is_http_url(source["robots_url"]) or not is_http_url(source["sitemap_fallback"]):
+                raise SystemExit(f"{name}: robots_url and sitemap_fallback must be absolute HTTP(S) URLs.")
+            try:
+                seeds.extend(robots_sitemaps(str(source["robots_url"]), str(source["sitemap_fallback"])))
+            except FetchBlocked as exc:
+                blocked.append(str(exc))
+        if not direct_urls and not seeds:
+            raise SystemExit(f"{name}: provide urls, url_list_file, sitemap_urls, or robots_url with sitemap_fallback.")
+        sitemap_urls, sitemap_blocked = walk_sitemaps(unique_urls(seeds), args.max_sitemap_urls) if seeds else ([], [])
+        blocked.extend(sitemap_blocked)
+        candidates = unique_urls(direct_urls + sitemap_candidates(sitemap_urls, source))
         if not candidates:
             print(f"{name}: no matching job URLs; not treating this as a negative finding.", file=sys.stderr)
         if blocked:
@@ -267,6 +363,9 @@ def cmd_sync(args: argparse.Namespace) -> int:
             except FetchBlocked as exc:
                 print(f"skip: {exc}", file=sys.stderr)
                 continue
+            if not raw:
+                print(f"skip: {url}: HTTP 404; no evidence captured", file=sys.stderr)
+                continue
             record = extract_job(final_url, raw, name)
             evidence = save_evidence(root, final_url, raw)
             con.execute("""INSERT INTO jobs(url,source,title,company,date_posted,classification,perm_score,lca_score,marker_hits,description_sha256,evidence_path,live,last_checked)
@@ -275,7 +374,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
               {**record, "marker_hits": json.dumps(record["marker_hits"]), "evidence_path": str(evidence), "last_checked": now()})
             fetched += 1
         con.commit()
-        print(f"{name}: declared URLs={len(urls)}, candidates={len(candidates)}, captured={fetched}, blocked_maps={len(blocked)}")
+        print(f"{name}: declared_urls={len(sitemap_urls)}, direct_urls={len(direct_urls)}, candidates={len(candidates)}, captured={fetched}, blocked_maps={len(blocked)}, truncated={len(candidates) > args.limit}")
     return 0
 
 

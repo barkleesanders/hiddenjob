@@ -3,11 +3,11 @@
 > ## Give this prompt to Muse
 >
 > ```text
-> Set up and run the private hiddenjob repository as my personal job-discovery and application assistant.
+> Set up this public hiddenjob repository as my personal, private local job-discovery and application assistant.
 >
 > I will provide my resume and any profile details you need in this private Muse conversation. Create `config/profile.json` and `config/automation.json` from the repository examples. Keep both files, captured postings, application materials, screenshots, cookies, credentials, and case records out of Git. Never use someone else's profile or resume.
 >
-> First read `README.md`, `MUSE_SETUP_PROMPT.md`, and `skills/hiddenjob/SKILL.md`. Discover postings from publisher-declared robots.txt and sitemaps, capture source evidence, and describe results neutrally. A posting may be less visible or poorly indexed; do not claim a company intentionally hid it without direct evidence. Treat blocked or incomplete sources as unmeasurable, not empty.
+> First read `README.md`, `MUSE_SETUP_PROMPT.md`, and `skills/hiddenjob/SKILL.md`. I may provide a JSONL export from `hiddenjobs` or another collector. It can contain non-URL fields, so save it only to ignored `config/hiddenjobs-urls.jsonl`; the importer will retain only each `url`. Add it through `url_list_file` in `config/targets.json`. You may add other direct URLs or explicit sitemap URLs without overwriting the existing sources. Use `config/hiddenjobs-targets.example.json` as a public starter registry when planning additional sources; it is not evidence of an open role. Discover postings from publisher-declared robots.txt and sitemaps, capture source evidence, and describe results neutrally. A posting may be less visible or poorly indexed; do not claim a company intentionally hid it without direct evidence. Treat blocked or incomplete sources as unmeasurable, not empty.
 >
 > Use my resume to rank opportunities and explain why each is a reasonable fit. Keep LCA-like notices separate from roles that appear open for applications. Run the discovery, evidence capture, ranking, staging, ATS prefill, status tracking, and follow-up reminders automatically.
 >
@@ -59,6 +59,31 @@ Run the standard-library test suite:
 ```bash
 python3 -m unittest discover -s tests -v
 ```
+
+## Import URLs from hiddenjobs, Muse, or another collector
+
+`sync` accepts direct job URLs in addition to robots/sitemap discovery. This is the recommended handoff from the larger `hiddenjobs` workflow: export its JSONL into ignored local configuration. The current export may contain other fields; this importer reads and retains only `url`.
+
+```bash
+# On a machine with the hiddenjobs CLI, create a local JSONL handoff.
+hiddenjobs --select url export --jsonl --out config/hiddenjobs-urls.jsonl
+
+# Start from the example, then add a source like this to config/targets.json.
+cp config/url-list.example.jsonl config/hiddenjobs-urls.jsonl
+```
+
+```json
+{
+  "name": "hiddenjobs-import",
+  "url_list_file": "hiddenjobs-urls.jsonl",
+  "sitemap_urls": ["https://careers.example.com/sitemap.xml"],
+  "job_url_pattern": "/jobs/"
+}
+```
+
+`url_list_file` is relative to `config/`. It can be a JSON array of URLs, a JSON object with a `urls` array, JSON Lines records with a `url` field (including `hiddenjobs export --jsonl`), or one URL per line. The importer validates HTTP(S) URLs, deduplicates them, and retains only the URL—not resume details, contacts, descriptions, or any other fields in an external record. Inline `urls` work too. `sitemap_urls` is optional and supplements `robots.txt`; apply `job_url_pattern` and/or `job_url_regex` to keep sitemap crawling focused. If `--limit` leaves candidates unvisited, `sync` prints `truncated=True`; that is a bounded run, not a negative result.
+
+The public [starter registry](config/hiddenjobs-targets.example.json) contains the careers hosts and known public ATS boards currently used by the owner’s `hiddenjobs` target list. It is a planning aid, not a claim of an open role or a request to crawl every host. Muse may add more records to an ignored local copy, then activate only the direct URLs or sitemap URLs it can measure.
 
 ## Evidence states
 

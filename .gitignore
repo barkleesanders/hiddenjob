@@ -2,6 +2,10 @@
 config/targets.json
 config/profile.json
 config/automation.json
+config/hiddenjobs-urls.jsonl
+config/hiddenjobs-urls.json
+config/url-list.json
+config/url-list.txt
 .hiddenjob/
 *.sqlite3
 *.db
