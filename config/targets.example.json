@@ -1,0 +1,20 @@
+{
+  "data_dir": ".hiddenjob",
+  "sources": [
+    {
+      "name": "jobsnow",
+      "base_url": "https://www.jobs.now",
+      "robots_url": "https://www.jobs.now/robots.txt",
+      "sitemap_fallback": "https://www.jobs.now/sitemap.xml",
+      "job_url_pattern": "/jobs/",
+      "job_url_regex": "^/jobs/\\d+(?:[-/]|$)"
+    }
+  ],
+  "company_hosts": [
+    {
+      "company": "Example Company",
+      "host": "careers.example.com",
+      "enabled": false
+    }
+  ]
+}
