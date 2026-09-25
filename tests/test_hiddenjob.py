@@ -111,6 +111,13 @@ class HiddenjobTests(unittest.TestCase):
         with self.assertRaises(hiddenjob.FetchBlocked):
             hiddenjob.ats_board_postings("linkedin", "1337", "LinkedIn")
 
+    def test_ats_timeout_passes_through_to_fetch(self):
+        payload = {"jobs": []}
+        with mock.patch.object(hiddenjob, "fetch_json", return_value=payload) as fetch:
+            hiddenjob.ats_board_postings("greenhouse", "acme", "Acme", timeout=7)
+        fetch.assert_called_once()
+        self.assertEqual(fetch.call_args.kwargs.get("timeout"), 7)
+
     def test_host_sources_only_enables_explicit_hosts(self):
         cfg = {"company_hosts": [{"company": "On", "host": "careers.on.test", "enabled": True},
                                  {"company": "Off", "host": "careers.off.test", "enabled": False},
@@ -135,7 +142,7 @@ class HiddenjobTests(unittest.TestCase):
             postings = [{"url": "https://jobs.ashbyhq.com/acme/1", "title": "Engineer", "company": "Acme",
                          "date_posted": "", "description": "Build services", "evidence_text": "{}"}]
             args = argparse.Namespace(config=str(config), limit=10, max_sitemap_urls=10)
-            def fake_boards(kind, board, company):
+            def fake_boards(kind, board, company, timeout=15):
                 if kind == "linkedin":
                     raise hiddenjob.FetchBlocked("unsupported ATS board kind: linkedin")
                 return postings

@@ -112,16 +112,17 @@ def fetch_json(url: str, timeout: int = 25) -> object:
         raise FetchBlocked(f"{url}: {exc}") from exc
 
 
-def ats_board_postings(kind: str, board: str, company: str) -> list[dict[str, object]]:
+def ats_board_postings(kind: str, board: str, company: str, timeout: int = 15) -> list[dict[str, object]]:
     """Fetch public postings from a supported ATS job board.
 
     Only the board's own public posting API is used; no scraping of rendered
     pages. Unknown board kinds are refused so a misconfigured registry entry
-    can never be silently misread.
+    can never be silently misread. Each board gets at most one request and the
+    timeout keeps one slow board from stalling the whole run.
     """
     postings: list[dict[str, object]] = []
     if kind == "greenhouse":
-        data = fetch_json(f"https://boards-api.greenhouse.io/v1/boards/{board}/jobs?content=true")
+        data = fetch_json(f"https://boards-api.greenhouse.io/v1/boards/{board}/jobs?content=true", timeout=timeout)
         jobs = data.get("jobs", []) if isinstance(data, dict) else []
         for job in jobs:
             if not isinstance(job, dict):
@@ -135,7 +136,7 @@ def ats_board_postings(kind: str, board: str, company: str) -> list[dict[str, ob
                 "evidence_text": json.dumps(job, indent=2),
             })
     elif kind == "ashby":
-        data = fetch_json(f"https://api.ashbyhq.com/posting-api/job-board/{board}")
+        data = fetch_json(f"https://api.ashbyhq.com/posting-api/job-board/{board}", timeout=timeout)
         jobs = data.get("jobs", []) if isinstance(data, dict) else []
         for job in jobs:
             if not isinstance(job, dict):
@@ -149,7 +150,7 @@ def ats_board_postings(kind: str, board: str, company: str) -> list[dict[str, ob
                 "evidence_text": json.dumps(job, indent=2),
             })
     elif kind == "lever":
-        data = fetch_json(f"https://api.lever.co/v0/postings/{board}?mode=json")
+        data = fetch_json(f"https://api.lever.co/v0/postings/{board}?mode=json", timeout=timeout)
         jobs = data if isinstance(data, list) else []
         for job in jobs:
             if not isinstance(job, dict):
@@ -508,7 +509,13 @@ def cmd_sync(args: argparse.Namespace) -> int:
         con.commit()
         print(f"{name}: declared_urls={len(sitemap_urls)}, direct_urls={len(direct_urls)}, candidates={len(candidates)}, captured={fetched}, blocked_maps={len(blocked)}, truncated={len(candidates) > args.limit}")
     ats_targets = load_ats_targets(cfg, cfg_path)
+    max_boards = getattr(args, "ats_max_boards", 0) or 0
+    ats_timeout = getattr(args, "ats_timeout", 15) or 15
+    boards_seen = 0
     for target in ats_targets:
+        if max_boards and boards_seen >= max_boards:
+            print(f"ats: board cap reached ({max_boards}); {len(ats_targets) - boards_seen} board(s) deferred.", file=sys.stderr)
+            break
         ats = target.get("ats")
         company = str(target.get("company", ""))
         if not isinstance(ats, dict) or target.get("enabled") is False:
@@ -518,8 +525,9 @@ def cmd_sync(args: argparse.Namespace) -> int:
             print(f"ats:{company}: missing kind or board; skipping.", file=sys.stderr)
             continue
         label = f"ats:{kind}:{board}"
+        boards_seen += 1
         try:
-            postings = ats_board_postings(kind, board, company)
+            postings = ats_board_postings(kind, board, company, timeout=ats_timeout)
         except FetchBlocked as exc:
             print(f"{label}: skipped: {exc}", file=sys.stderr)
             continue
@@ -699,7 +707,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--config", default="config/targets.json", help="private runtime config path")
     sub = p.add_subparsers(dest="command", required=True)
     init = sub.add_parser("init"); init.add_argument("--force", action="store_true"); init.set_defaults(func=cmd_init)
-    sync = sub.add_parser("sync"); sync.add_argument("--limit", type=int, default=25); sync.add_argument("--max-sitemap-urls", type=int, default=5000); sync.add_argument("--max-host-sitemap-urls", type=int, default=400); sync.set_defaults(func=cmd_sync)
+    sync = sub.add_parser("sync"); sync.add_argument("--limit", type=int, default=25); sync.add_argument("--max-sitemap-urls", type=int, default=5000); sync.add_argument("--max-host-sitemap-urls", type=int, default=400); sync.add_argument("--ats-timeout", type=int, default=15, help="seconds per ATS board request"); sync.add_argument("--ats-max-boards", type=int, default=0, help="cap ATS boards per run; 0 = all"); sync.set_defaults(func=cmd_sync)
     jobs = sub.add_parser("jobs"); jobs.add_argument("--classification"); jobs.add_argument("--company"); jobs.add_argument("--limit", type=int, default=50); jobs.set_defaults(func=cmd_jobs)
     stage = sub.add_parser("stage"); stage.add_argument("url"); stage.add_argument("--note"); stage.set_defaults(func=cmd_stage)
     track = sub.add_parser("track"); track.add_argument("url"); track.add_argument("state"); track.add_argument("--note"); track.set_defaults(func=cmd_track)
