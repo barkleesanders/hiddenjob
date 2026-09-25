@@ -483,6 +483,9 @@ def cmd_sync(args: argparse.Namespace) -> int:
             except FetchBlocked as exc:
                 blocked.append(str(exc))
         if not direct_urls and not seeds:
+            if blocked:
+                print(f"{name}: all seeds blocked ({'; '.join(blocked)}); skipping source, preserving existing rows.", file=sys.stderr)
+                continue
             raise SystemExit(f"{name}: provide urls, url_list_file, sitemap_urls, or robots_url with sitemap_fallback.")
         budget = getattr(args, "max_host_sitemap_urls", 400) if source.get("host_sitemap") else args.max_sitemap_urls
         sitemap_urls, sitemap_blocked = walk_sitemaps(unique_urls(seeds), budget) if seeds else ([], [])

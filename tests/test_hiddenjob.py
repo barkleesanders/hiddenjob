@@ -66,6 +66,25 @@ class HiddenjobTests(unittest.TestCase):
             con = sqlite3.connect(root / "ledger" / "hiddenjob.sqlite3")
             self.assertEqual(con.execute("SELECT COUNT(*) FROM jobs").fetchone()[0], 2)
 
+    def test_sync_skips_source_when_all_seeds_blocked(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); (root / "config").mkdir(); config = root / "config" / "targets.json"
+            config.write_text(json.dumps({"data_dir": "ledger", "sources": [
+                {"name": "flaky", "robots_url": "https://example.test/robots.txt",
+                 "sitemap_fallback": "https://example.test/sitemap.xml", "job_url_pattern": "/jobs/"},
+                {"name": "steady", "urls": ["https://example.test/jobs/9"]},
+            ]}))
+            page = '<h1>Engineer</h1><p>Build services</p>'
+            args = argparse.Namespace(config=str(config), limit=10, max_sitemap_urls=10)
+            def fake_fetch(url):
+                if "robots.txt" in url:
+                    raise hiddenjob.FetchBlocked("https://example.test/robots.txt: timed out")
+                return (page, url)
+            with mock.patch.object(hiddenjob, "fetch", side_effect=fake_fetch):
+                self.assertEqual(hiddenjob.cmd_sync(args), 0)
+            con = sqlite3.connect(root / "ledger" / "hiddenjob.sqlite3")
+            self.assertEqual(con.execute("SELECT url FROM jobs").fetchone()[0], "https://example.test/jobs/9")
+
     def test_sync_uses_explicit_sitemap_urls_without_robots(self):
         sitemap = '<urlset><url><loc>https://example.test/jobs/1</loc></url><url><loc>https://example.test/about</loc></url></urlset>'
         page = '<h1>Engineer</h1><p>Build services</p>'
@@ -77,6 +96,14 @@ class HiddenjobTests(unittest.TestCase):
                 self.assertEqual(hiddenjob.cmd_sync(args), 0)
             con = sqlite3.connect(root / "ledger" / "hiddenjob.sqlite3")
             self.assertEqual(con.execute("SELECT url FROM jobs").fetchone()[0], "https://example.test/jobs/1")
+
+    def test_sync_still_rejects_source_with_no_urls_configured(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); (root / "config").mkdir(); config = root / "config" / "targets.json"
+            config.write_text(json.dumps({"data_dir": "ledger", "sources": [{"name": "empty"}]}))
+            args = argparse.Namespace(config=str(config), limit=10, max_sitemap_urls=10)
+            with self.assertRaises(SystemExit):
+                hiddenjob.cmd_sync(args)
 
     def test_ats_greenhouse_normalizes_postings(self):
         payload = {"jobs": [{"absolute_url": "https://job-boards.greenhouse.io/acme/jobs/1", "title": "Product Manager",
