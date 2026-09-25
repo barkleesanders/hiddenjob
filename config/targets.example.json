@@ -16,5 +16,6 @@
       "host": "careers.example.com",
       "enabled": false
     }
-  ]
+  ],
+  "ats_targets_file": "hiddenjobs-targets.json"
 }

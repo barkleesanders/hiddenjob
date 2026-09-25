@@ -77,3 +77,74 @@ class HiddenjobTests(unittest.TestCase):
                 self.assertEqual(hiddenjob.cmd_sync(args), 0)
             con = sqlite3.connect(root / "ledger" / "hiddenjob.sqlite3")
             self.assertEqual(con.execute("SELECT url FROM jobs").fetchone()[0], "https://example.test/jobs/1")
+
+    def test_ats_greenhouse_normalizes_postings(self):
+        payload = {"jobs": [{"absolute_url": "https://job-boards.greenhouse.io/acme/jobs/1", "title": "Product Manager",
+                             "updated_at": "2026-09-20T00:00:00Z", "content": "<p>Own the roadmap.</p>"}]}
+        with mock.patch.object(hiddenjob, "fetch_json", return_value=payload):
+            postings = hiddenjob.ats_board_postings("greenhouse", "acme", "Acme")
+        self.assertEqual(len(postings), 1)
+        self.assertEqual(postings[0]["url"], "https://job-boards.greenhouse.io/acme/jobs/1")
+        self.assertEqual(postings[0]["title"], "Product Manager")
+        self.assertEqual(postings[0]["company"], "Acme")
+        self.assertIn("Own the roadmap.", postings[0]["description"])
+
+    def test_ats_ashby_normalizes_postings(self):
+        payload = {"jobs": [{"id": "abc", "jobUrl": "https://jobs.ashbyhq.com/acme/abc", "title": "IT Support Engineer",
+                             "publishedAt": "2026-09-19T00:00:00Z", "descriptionHtml": "<p>Help users.</p>"}]}
+        with mock.patch.object(hiddenjob, "fetch_json", return_value=payload):
+            postings = hiddenjob.ats_board_postings("ashby", "acme", "Acme")
+        self.assertEqual(len(postings), 1)
+        self.assertEqual(postings[0]["url"], "https://jobs.ashbyhq.com/acme/abc")
+        self.assertIn("Help users.", postings[0]["description"])
+
+    def test_ats_lever_normalizes_postings(self):
+        payload = [{"hostedUrl": "https://jobs.lever.co/acme/xyz", "text": "Forward Deployed Engineer",
+                    "createdAt": 1758758400000, "description": "<p>Work with customers.</p>"}]
+        with mock.patch.object(hiddenjob, "fetch_json", return_value=payload):
+            postings = hiddenjob.ats_board_postings("lever", "acme", "Acme")
+        self.assertEqual(len(postings), 1)
+        self.assertEqual(postings[0]["title"], "Forward Deployed Engineer")
+        self.assertTrue(postings[0]["date_posted"].startswith("2025-09-25"))
+
+    def test_ats_unsupported_kind_is_refused(self):
+        with self.assertRaises(hiddenjob.FetchBlocked):
+            hiddenjob.ats_board_postings("linkedin", "1337", "LinkedIn")
+
+    def test_host_sources_only_enables_explicit_hosts(self):
+        cfg = {"company_hosts": [{"company": "On", "host": "careers.on.test", "enabled": True},
+                                 {"company": "Off", "host": "careers.off.test", "enabled": False},
+                                 {"company": "Default", "host": "careers.default.test"}]}
+        sources = hiddenjob.host_sources(cfg)
+        self.assertEqual(len(sources), 1)
+        self.assertEqual(sources[0]["name"], "host:careers.on.test")
+        self.assertEqual(sources[0]["robots_url"], "https://careers.on.test/robots.txt")
+        self.assertIn("job_url_regex", sources[0])
+
+    def test_sync_pulls_ats_targets_and_skips_unsupported(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); (root / "config").mkdir()
+            config = root / "config" / "targets.json"
+            registry = root / "config" / "targets-local.json"
+            registry.write_text(json.dumps({"targets": [
+                {"company": "Acme", "ats": {"kind": "ashby", "board": "acme"}},
+                {"company": "Stale", "ats": {"kind": "ashby", "board": "stale"}, "enabled": False},
+                {"company": "Nope", "ats": {"kind": "linkedin", "board": "1337"}},
+            ]}))
+            config.write_text(json.dumps({"data_dir": "ledger", "sources": [], "ats_targets_file": "targets-local.json"}))
+            postings = [{"url": "https://jobs.ashbyhq.com/acme/1", "title": "Engineer", "company": "Acme",
+                         "date_posted": "", "description": "Build services", "evidence_text": "{}"}]
+            args = argparse.Namespace(config=str(config), limit=10, max_sitemap_urls=10)
+            def fake_boards(kind, board, company):
+                if kind == "linkedin":
+                    raise hiddenjob.FetchBlocked("unsupported ATS board kind: linkedin")
+                return postings
+            with mock.patch.object(hiddenjob, "ats_board_postings", side_effect=fake_boards):
+                self.assertEqual(hiddenjob.cmd_sync(args), 0)
+            rows = sqlite3.connect(root / "ledger" / "hiddenjob.sqlite3").execute("SELECT url, source FROM jobs").fetchall()
+            self.assertEqual(len(rows), 1)
+            row = rows[0]
+            self.assertEqual(row[0], "https://jobs.ashbyhq.com/acme/1")
+            self.assertEqual(row[1], "ats:ashby:acme")
+            con = sqlite3.connect(root / "ledger" / "hiddenjob.sqlite3")
+            self.assertTrue(con.execute("SELECT evidence_path FROM jobs").fetchone()[0].endswith(".json"))

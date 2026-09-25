@@ -85,6 +85,16 @@ cp config/url-list.example.jsonl config/hiddenjobs-urls.jsonl
 
 The public [starter registry](config/hiddenjobs-targets.example.json) contains the careers hosts and known public ATS boards currently used by the owner’s `hiddenjobs` target list. It is a planning aid, not a claim of an open role or a request to crawl every host. Muse may add more records to an ignored local copy, then activate only the direct URLs or sitemap URLs it can measure.
 
+## ATS boards and company hosts
+
+Set `"ats_targets_file": "hiddenjobs-targets.json"` in `config/targets.json` (after copying the example registry to that ignored local file) and `sync` will also pull every registry entry's public ATS board:
+
+- Supported board kinds: `greenhouse` (`boards-api.greenhouse.io`), `ashby` (`api.ashbyhq.com/posting-api`), `lever` (`api.lever.co`). One HTTP call per board; the JSON response is saved as evidence per posting.
+- Entries with `enabled: false`, a missing `kind`/`board`, or an unsupported kind are skipped with a stderr note — never silently and never treated as "no jobs".
+- Board slugs must be verified before they are added: probe the board's public API and keep only entries that return HTTP 200 with real postings.
+
+Entries under `company_hosts` with `"enabled": true` are walked through that host's own `robots.txt`/sitemap with a bounded budget (`--max-host-sitemap-urls`, default 400), preferring career child maps and filtering URLs to job/career/position/opening paths. Hosts default to disabled; enable only hosts whose sitemaps are publisher-declared and measurable.
+
 ## Evidence states
 
 | State | Meaning |

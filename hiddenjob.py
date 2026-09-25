@@ -99,6 +99,75 @@ def fetch(url: str, timeout: int = 25) -> tuple[str, str]:
     return body, final_url
 
 
+def fetch_json(url: str, timeout: int = 25) -> object:
+    req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            if response.status != 200:
+                raise FetchBlocked(f"{url}: HTTP {response.status}")
+            return json.loads(response.read().decode("utf-8", "replace"))
+    except urllib.error.HTTPError as exc:
+        raise FetchBlocked(f"{url}: HTTP {exc.code}") from exc
+    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+        raise FetchBlocked(f"{url}: {exc}") from exc
+
+
+def ats_board_postings(kind: str, board: str, company: str) -> list[dict[str, object]]:
+    """Fetch public postings from a supported ATS job board.
+
+    Only the board's own public posting API is used; no scraping of rendered
+    pages. Unknown board kinds are refused so a misconfigured registry entry
+    can never be silently misread.
+    """
+    postings: list[dict[str, object]] = []
+    if kind == "greenhouse":
+        data = fetch_json(f"https://boards-api.greenhouse.io/v1/boards/{board}/jobs?content=true")
+        jobs = data.get("jobs", []) if isinstance(data, dict) else []
+        for job in jobs:
+            if not isinstance(job, dict):
+                continue
+            postings.append({
+                "url": str(job.get("absolute_url") or ""),
+                "title": str(job.get("title") or ""),
+                "company": company or str((job.get("departments") or [{}])[0].get("name", "")),
+                "date_posted": str(job.get("updated_at") or ""),
+                "description": clean_text(str(job.get("content") or "")),
+                "evidence_text": json.dumps(job, indent=2),
+            })
+    elif kind == "ashby":
+        data = fetch_json(f"https://api.ashbyhq.com/posting-api/job-board/{board}")
+        jobs = data.get("jobs", []) if isinstance(data, dict) else []
+        for job in jobs:
+            if not isinstance(job, dict):
+                continue
+            postings.append({
+                "url": str(job.get("jobUrl") or f"https://jobs.ashbyhq.com/{board}/{job.get('id', '')}"),
+                "title": str(job.get("title") or ""),
+                "company": company,
+                "date_posted": str(job.get("publishedAt") or ""),
+                "description": clean_text(str(job.get("descriptionHtml") or job.get("descriptionPlain") or "")),
+                "evidence_text": json.dumps(job, indent=2),
+            })
+    elif kind == "lever":
+        data = fetch_json(f"https://api.lever.co/v0/postings/{board}?mode=json")
+        jobs = data if isinstance(data, list) else []
+        for job in jobs:
+            if not isinstance(job, dict):
+                continue
+            created = job.get("createdAt")
+            postings.append({
+                "url": str(job.get("hostedUrl") or ""),
+                "title": str(job.get("text") or ""),
+                "company": company,
+                "date_posted": datetime.fromtimestamp(created / 1000, UTC).isoformat(timespec="seconds") if isinstance(created, (int, float)) else "",
+                "description": clean_text(str(job.get("description") or job.get("descriptionPlain") or "")),
+                "evidence_text": json.dumps(job, indent=2),
+            })
+    else:
+        raise FetchBlocked(f"unsupported ATS board kind: {kind}")
+    return [p for p in postings if p["url"] and p["title"]]
+
+
 def robots_sitemaps(robots_url: str, fallback: str) -> list[str]:
     text, _ = fetch(robots_url)
     found = re.findall(r"(?im)^\s*sitemap:\s*(\S+)", text)
@@ -307,12 +376,76 @@ def database(root: Path) -> sqlite3.Connection:
     return con
 
 
-def save_evidence(root: Path, url: str, content: str) -> Path:
+def save_evidence(root: Path, url: str, content: str, suffix: str = ".html") -> Path:
     digest = hashlib.sha256(content.encode()).hexdigest()
-    path = root / "evidence" / f"{digest}.html"
+    path = root / "evidence" / f"{digest}{suffix}"
     if not path.exists():
         path.write_text(content)
     return path
+
+
+def load_ats_targets(cfg: dict[str, object], cfg_path: Path) -> list[dict[str, object]]:
+    """Read the optional starter registry of careers hosts and ATS boards.
+
+    Entries without an explicit ``enabled: false`` run their ATS board; the
+    registry is a public list of boards, not evidence of any open job.
+    """
+    value = cfg.get("ats_targets_file")
+    if not value:
+        return []
+    path = config_relative_path(value, cfg_path, "ats_targets_file")
+    if not path.exists():
+        raise SystemExit(f"ATS targets file not found: {path}")
+    try:
+        data = json.loads(path.read_text())
+    except json.JSONDecodeError as exc:
+        raise SystemExit(f"Invalid JSON in {path}: {exc}") from exc
+    targets = data.get("targets", [])
+    if not isinstance(targets, list):
+        raise SystemExit(f"{path}: expected a targets list.")
+    return [t for t in targets if isinstance(t, dict)]
+
+
+def host_sources(cfg: dict[str, object]) -> list[dict[str, object]]:
+    """Turn explicitly enabled company_hosts entries into sitemap sources.
+
+    Hosts default to disabled; enabling one asks sync to walk that host's own
+    publisher-declared sitemaps with a bounded budget, preferring career maps.
+    """
+    hosts = cfg.get("company_hosts", [])
+    if not isinstance(hosts, list):
+        raise SystemExit("company_hosts must be a list.")
+    sources = []
+    for entry in hosts:
+        if not isinstance(entry, dict) or entry.get("enabled") is not True:
+            continue
+        host = str(entry.get("host", "")).strip()
+        company = str(entry.get("company", "")).strip()
+        if not host:
+            raise SystemExit("Every enabled company_hosts entry needs a host.")
+        sources.append({
+            "name": f"host:{host}",
+            "company": company,
+            "robots_url": f"https://{host}/robots.txt",
+            "sitemap_fallback": f"https://{host}/sitemap.xml",
+            "job_url_regex": r"(?i)/(?:[^?/]*/)*(?:job|career|position|opening|vacanc)[^?]*",
+            "host_sitemap": True,
+        })
+    return sources
+
+
+def store_job(con: sqlite3.Connection, root: Path, record: dict[str, object]) -> None:
+    """Classify a posting record, persist its evidence, and upsert the ledger."""
+    record = dict(record)
+    record.update(classify(str(record.get("description") or "")))
+    suffix = ".json" if record.pop("evidence_is_json", False) else ".html"
+    evidence = save_evidence(root, str(record["url"]), str(record.pop("evidence_text", "")), suffix=suffix)
+    con.execute("""INSERT INTO jobs(url,source,title,company,date_posted,classification,perm_score,lca_score,marker_hits,description_sha256,evidence_path,live,last_checked)
+      VALUES(:url,:source,:title,:company,:date_posted,:classification,:perm_score,:lca_score,:marker_hits,:description_sha256,:evidence_path,1,:last_checked)
+      ON CONFLICT(url) DO UPDATE SET source=excluded.source,title=excluded.title,company=excluded.company,date_posted=excluded.date_posted,classification=excluded.classification,perm_score=excluded.perm_score,lca_score=excluded.lca_score,marker_hits=excluded.marker_hits,description_sha256=excluded.description_sha256,evidence_path=excluded.evidence_path,live=1,last_checked=excluded.last_checked""",
+      {**record, "marker_hits": json.dumps(record["marker_hits"]),
+       "description_sha256": hashlib.sha256(str(record.get("description") or "").encode()).hexdigest(),
+       "evidence_path": str(evidence), "last_checked": now()})
 
 
 def cmd_init(args: argparse.Namespace) -> int:
@@ -331,7 +464,8 @@ def cmd_sync(args: argparse.Namespace) -> int:
     cfg, root = load_config(cfg_path), None
     root = data_root(cfg, cfg_path)
     con = database(root)
-    for source in cfg["sources"]:
+    sources = list(cfg["sources"]) + host_sources(cfg)
+    for source in sources:
         if not isinstance(source, dict) or not isinstance(source.get("name"), str) or not source["name"].strip():
             raise SystemExit("Every source needs a non-empty name.")
         name = str(source["name"])
@@ -349,7 +483,8 @@ def cmd_sync(args: argparse.Namespace) -> int:
                 blocked.append(str(exc))
         if not direct_urls and not seeds:
             raise SystemExit(f"{name}: provide urls, url_list_file, sitemap_urls, or robots_url with sitemap_fallback.")
-        sitemap_urls, sitemap_blocked = walk_sitemaps(unique_urls(seeds), args.max_sitemap_urls) if seeds else ([], [])
+        budget = getattr(args, "max_host_sitemap_urls", 400) if source.get("host_sitemap") else args.max_sitemap_urls
+        sitemap_urls, sitemap_blocked = walk_sitemaps(unique_urls(seeds), budget) if seeds else ([], [])
         blocked.extend(sitemap_blocked)
         candidates = unique_urls(direct_urls + sitemap_candidates(sitemap_urls, source))
         if not candidates:
@@ -367,14 +502,36 @@ def cmd_sync(args: argparse.Namespace) -> int:
                 print(f"skip: {url}: HTTP 404; no evidence captured", file=sys.stderr)
                 continue
             record = extract_job(final_url, raw, name)
-            evidence = save_evidence(root, final_url, raw)
-            con.execute("""INSERT INTO jobs(url,source,title,company,date_posted,classification,perm_score,lca_score,marker_hits,description_sha256,evidence_path,live,last_checked)
-              VALUES(:url,:source,:title,:company,:date_posted,:classification,:perm_score,:lca_score,:marker_hits,:description_sha256,:evidence_path,1,:last_checked)
-              ON CONFLICT(url) DO UPDATE SET source=excluded.source,title=excluded.title,company=excluded.company,date_posted=excluded.date_posted,classification=excluded.classification,perm_score=excluded.perm_score,lca_score=excluded.lca_score,marker_hits=excluded.marker_hits,description_sha256=excluded.description_sha256,evidence_path=excluded.evidence_path,live=1,last_checked=excluded.last_checked""",
-              {**record, "marker_hits": json.dumps(record["marker_hits"]), "evidence_path": str(evidence), "last_checked": now()})
+            record["evidence_text"] = raw
+            store_job(con, root, record)
             fetched += 1
         con.commit()
         print(f"{name}: declared_urls={len(sitemap_urls)}, direct_urls={len(direct_urls)}, candidates={len(candidates)}, captured={fetched}, blocked_maps={len(blocked)}, truncated={len(candidates) > args.limit}")
+    ats_targets = load_ats_targets(cfg, cfg_path)
+    for target in ats_targets:
+        ats = target.get("ats")
+        company = str(target.get("company", ""))
+        if not isinstance(ats, dict) or target.get("enabled") is False:
+            continue
+        kind, board = str(ats.get("kind", "")), str(ats.get("board", ""))
+        if not kind or not board:
+            print(f"ats:{company}: missing kind or board; skipping.", file=sys.stderr)
+            continue
+        label = f"ats:{kind}:{board}"
+        try:
+            postings = ats_board_postings(kind, board, company)
+        except FetchBlocked as exc:
+            print(f"{label}: skipped: {exc}", file=sys.stderr)
+            continue
+        captured = 0
+        for posting in postings[:args.limit]:
+            posting = dict(posting)
+            posting["source"] = label
+            posting["evidence_is_json"] = True
+            store_job(con, root, posting)
+            captured += 1
+        con.commit()
+        print(f"{label} ({company or 'unknown company'}): board_postings={len(postings)}, captured={captured}, truncated={len(postings) > args.limit}")
     return 0
 
 
@@ -542,7 +699,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--config", default="config/targets.json", help="private runtime config path")
     sub = p.add_subparsers(dest="command", required=True)
     init = sub.add_parser("init"); init.add_argument("--force", action="store_true"); init.set_defaults(func=cmd_init)
-    sync = sub.add_parser("sync"); sync.add_argument("--limit", type=int, default=25); sync.add_argument("--max-sitemap-urls", type=int, default=5000); sync.set_defaults(func=cmd_sync)
+    sync = sub.add_parser("sync"); sync.add_argument("--limit", type=int, default=25); sync.add_argument("--max-sitemap-urls", type=int, default=5000); sync.add_argument("--max-host-sitemap-urls", type=int, default=400); sync.set_defaults(func=cmd_sync)
     jobs = sub.add_parser("jobs"); jobs.add_argument("--classification"); jobs.add_argument("--company"); jobs.add_argument("--limit", type=int, default=50); jobs.set_defaults(func=cmd_jobs)
     stage = sub.add_parser("stage"); stage.add_argument("url"); stage.add_argument("--note"); stage.set_defaults(func=cmd_stage)
     track = sub.add_parser("track"); track.add_argument("url"); track.add_argument("state"); track.add_argument("--note"); track.set_defaults(func=cmd_track)

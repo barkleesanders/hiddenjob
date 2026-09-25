@@ -11,3 +11,4 @@ config/url-list.txt
 *.db
 __pycache__/
 .pytest_cache/
+config/hiddenjobs-targets.json
