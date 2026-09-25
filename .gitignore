@@ -7,6 +7,7 @@ config/hiddenjobs-urls.json
 config/url-list.json
 config/url-list.txt
 .hiddenjob/
+materials/
 *.sqlite3
 *.db
 __pycache__/
