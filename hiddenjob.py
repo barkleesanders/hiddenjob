@@ -602,10 +602,43 @@ def cmd_track(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_check_duplicate(args: argparse.Namespace) -> int:
+    """Check if a job URL (or company+title) already has an application record."""
+    import json
+    con, _ = with_db(args)
+    # Exact URL match
+    app = con.execute(
+        "SELECT a.job_url, a.state, a.updated_at, j.company, j.title FROM applications a LEFT JOIN jobs j ON j.url=a.job_url WHERE a.job_url=?",
+        (args.url,)).fetchone()
+    if app:
+        print(json.dumps({"duplicate": True, "match_type": "exact_url", "job_url": app["job_url"],
+                          "state": app["state"], "company": app["company"], "title": app["title"],
+                          "updated_at": app["updated_at"]}, indent=2))
+        return 0
+    # Fuzzy: same company + similar title (if --company and --title provided)
+    if args.company and args.title:
+        rows = con.execute(
+            """SELECT a.job_url, a.state, j.company, j.title FROM applications a
+               JOIN jobs j ON j.url=a.job_url
+               WHERE LOWER(j.company)=LOWER(?) AND LOWER(j.title) LIKE '%' || LOWER(?) || '%'""",
+            (args.company, args.title)).fetchall()
+        if rows:
+            print(json.dumps({"duplicate": True, "match_type": "company_title",
+                              "matches": [{"job_url": r["job_url"], "state": r["state"],
+                                          "company": r["company"], "title": r["title"]} for r in rows]}, indent=2))
+            return 0
+    print(json.dumps({"duplicate": False}, indent=2))
+    return 0
+
+
 def cmd_apply(args: argparse.Namespace) -> int:
     """Run the optional local browser adapter against a reviewed, staged job."""
     con, root = with_db(args)
     app = con.execute("SELECT state FROM applications WHERE job_url=?", (args.url,)).fetchone()
+    if app and app["state"] == "submitted":
+        raise SystemExit(f"Already submitted for {args.url}; refusing to apply twice. Use 'review' to see the submission record.")
+    if app and app["state"] == "prefilled":
+        raise SystemExit(f"Already prefilled for {args.url}; review before submitting. Use 'review' to see the prefill record.")
     if not app or app["state"] not in {"staged", "drafted"}:
         raise SystemExit("Stage and review the job before using the browser adapter.")
     profile = Path(args.profile).expanduser()
@@ -724,6 +757,7 @@ def parser() -> argparse.ArgumentParser:
     jobs = sub.add_parser("jobs"); jobs.add_argument("--classification"); jobs.add_argument("--company"); jobs.add_argument("--limit", type=int, default=50); jobs.set_defaults(func=cmd_jobs)
     stage = sub.add_parser("stage"); stage.add_argument("url"); stage.add_argument("--note"); stage.set_defaults(func=cmd_stage)
     track = sub.add_parser("track"); track.add_argument("url"); track.add_argument("state"); track.add_argument("--note"); track.set_defaults(func=cmd_track)
+    dup = sub.add_parser("check-duplicate", help="check if a job already has an application record"); dup.add_argument("url"); dup.add_argument("--company"); dup.add_argument("--title"); dup.set_defaults(func=cmd_check_duplicate)
     apply = sub.add_parser("apply", help="optional browser prefill for a staged job")
     apply.add_argument("url"); apply.add_argument("--profile", default="config/profile.json")
     apply.add_argument("--submit", action="store_true", help="click submit only with the environment and confirmation gates")
