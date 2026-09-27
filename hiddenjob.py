@@ -502,7 +502,12 @@ def cmd_sync(args: argparse.Namespace) -> int:
             source_limit = int(source.get("limit") or args.limit)
         except (TypeError, ValueError):
             source_limit = args.limit
-        for url in candidates[:source_limit]:
+        # take: "tail" — for publishers whose sitemap lists oldest-first
+        # (e.g. jobs.now numeric IDs ascend with newness), capture the newest
+        # candidates instead of the oldest.
+        take = str(source.get("take") or "head").lower()
+        selected = candidates[-source_limit:] if take == "tail" and source_limit > 0 else candidates[:source_limit]
+        for url in selected:
             try:
                 raw, final_url = fetch(url)
             except FetchBlocked as exc:

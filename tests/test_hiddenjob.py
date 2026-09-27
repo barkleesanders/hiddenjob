@@ -87,6 +87,27 @@ class HiddenjobTests(unittest.TestCase):
             self.assertEqual(deep, 3)
             self.assertEqual(shallow, 2)
 
+    def test_sync_take_tail_selects_newest_candidates(self):
+        # Publishers whose sitemap lists oldest-first (jobs.now numeric IDs
+        # ascend with newness): take:"tail" must capture the newest, not oldest.
+        page = '<h1>Engineer</h1><p>Build services</p>'
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); (root / "config").mkdir(); config = root / "config" / "targets.json"
+            config.write_text(json.dumps({"data_dir": "ledger", "sources": [
+                {"name": "oldest_first", "limit": 2, "take": "tail",
+                 "urls": ["https://example.test/jobs/1", "https://example.test/jobs/2",
+                          "https://example.test/jobs/3", "https://example.test/jobs/4"]},
+            ]}))
+            args = argparse.Namespace(config=str(config), limit=10, max_sitemap_urls=10)
+            fetched_urls = []
+            def fake_fetch(url):
+                fetched_urls.append(url)
+                return (page, url)
+            with mock.patch.object(hiddenjob, "fetch", side_effect=fake_fetch):
+                self.assertEqual(hiddenjob.cmd_sync(args), 0)
+            self.assertEqual(fetched_urls,
+                             ["https://example.test/jobs/3", "https://example.test/jobs/4"])
+
     def test_sync_skips_source_when_all_seeds_blocked(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp); (root / "config").mkdir(); config = root / "config" / "targets.json"
