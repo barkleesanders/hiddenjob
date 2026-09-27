@@ -496,7 +496,13 @@ def cmd_sync(args: argparse.Namespace) -> int:
         if blocked:
             print(f"{name}: {len(blocked)} sitemap(s) could not be measured; preserving existing rows.", file=sys.stderr)
         fetched = 0
-        for url in candidates[:args.limit]:
+        # Per-source limit override: high-volume aggregators (e.g. jobs.now) can
+        # run deeper than the global --limit without slowing small boards.
+        try:
+            source_limit = int(source.get("limit") or args.limit)
+        except (TypeError, ValueError):
+            source_limit = args.limit
+        for url in candidates[:source_limit]:
             try:
                 raw, final_url = fetch(url)
             except FetchBlocked as exc:
@@ -510,7 +516,7 @@ def cmd_sync(args: argparse.Namespace) -> int:
             store_job(con, root, record)
             fetched += 1
         con.commit()
-        print(f"{name}: declared_urls={len(sitemap_urls)}, direct_urls={len(direct_urls)}, candidates={len(candidates)}, captured={fetched}, blocked_maps={len(blocked)}, truncated={len(candidates) > args.limit}")
+        print(f"{name}: declared_urls={len(sitemap_urls)}, direct_urls={len(direct_urls)}, candidates={len(candidates)}, captured={fetched}, blocked_maps={len(blocked)}, truncated={len(candidates) > source_limit}")
     ats_targets = load_ats_targets(cfg, cfg_path)
     max_boards = getattr(args, "ats_max_boards", 0) or 0
     ats_timeout = getattr(args, "ats_timeout", 15) or 15
@@ -535,14 +541,18 @@ def cmd_sync(args: argparse.Namespace) -> int:
             print(f"{label}: skipped: {exc}", file=sys.stderr)
             continue
         captured = 0
-        for posting in postings[:args.limit]:
+        try:
+            target_limit = int(target.get("limit") or args.limit)
+        except (TypeError, ValueError):
+            target_limit = args.limit
+        for posting in postings[:target_limit]:
             posting = dict(posting)
             posting["source"] = label
             posting["evidence_is_json"] = True
             store_job(con, root, posting)
             captured += 1
         con.commit()
-        print(f"{label} ({company or 'unknown company'}): board_postings={len(postings)}, captured={captured}, truncated={len(postings) > args.limit}")
+        print(f"{label} ({company or 'unknown company'}): board_postings={len(postings)}, captured={captured}, truncated={len(postings) > target_limit}")
     return 0
 
 

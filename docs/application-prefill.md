@@ -10,13 +10,22 @@ Answer directly from the gitignored local profile (`config/profile.json`,
 never committed):
 
 - **"How did you hear about this job?"** → the profile's `default_source`
-  (e.g. `"Online job board"`). The user can override per application.
+  (e.g. `"Online job board"`). The user can override per application. If the
+  form offers no matching option, fall back to the profile's `source_fallback`
+  (e.g. `"LinkedIn"`).
+- **Pronouns** → the profile's `pronouns` (standing answer, no need to ask).
+- **In-office / anchor-day commitment** → the profile's `anchor_days_ok`
+  (standing yes/no).
+- **EEO self-identification** (gender, race/ethnicity — always voluntary) →
+  from the profile's `eeo` block, answered exactly as configured.
 - **"Have you ever worked for {employer}?"** → check the profile's
   `employment_history` for a case-insensitive employer-name match.
   Match → Yes; no match → No. Never guess from memory — only from the
   profile data on disk.
 - **Work authorization / sponsorship** → from the profile's
   `work_authorization` block, answered exactly as the user configured it.
+- **Veteran status** → from the profile's `veteran_status`, answered exactly
+  as configured.
 
 ## What never gets auto-answered
 

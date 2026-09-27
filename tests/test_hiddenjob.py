@@ -66,6 +66,27 @@ class HiddenjobTests(unittest.TestCase):
             con = sqlite3.connect(root / "ledger" / "hiddenjob.sqlite3")
             self.assertEqual(con.execute("SELECT COUNT(*) FROM jobs").fetchone()[0], 2)
 
+    def test_sync_honors_per_source_limit_override(self):
+        page = '<h1>Engineer</h1><p>Build services</p>'
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp); (root / "config").mkdir(); config = root / "config" / "targets.json"
+            config.write_text(json.dumps({"data_dir": "ledger", "sources": [
+                {"name": "deep", "limit": 3,
+                 "urls": ["https://example.test/jobs/1", "https://example.test/jobs/2",
+                          "https://example.test/jobs/3", "https://example.test/jobs/4"]},
+                {"name": "shallow",
+                 "urls": ["https://example.test/jobs/5", "https://example.test/jobs/6",
+                          "https://example.test/jobs/7", "https://example.test/jobs/8"]},
+            ]}))
+            args = argparse.Namespace(config=str(config), limit=2, max_sitemap_urls=10)
+            with mock.patch.object(hiddenjob, "fetch", side_effect=lambda url: (page, url)):
+                self.assertEqual(hiddenjob.cmd_sync(args), 0)
+            con = sqlite3.connect(root / "ledger" / "hiddenjob.sqlite3")
+            deep = con.execute("SELECT COUNT(*) FROM jobs WHERE source='deep'").fetchone()[0]
+            shallow = con.execute("SELECT COUNT(*) FROM jobs WHERE source='shallow'").fetchone()[0]
+            self.assertEqual(deep, 3)
+            self.assertEqual(shallow, 2)
+
     def test_sync_skips_source_when_all_seeds_blocked(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp); (root / "config").mkdir(); config = root / "config" / "targets.json"
@@ -182,3 +203,55 @@ class HiddenjobTests(unittest.TestCase):
             self.assertEqual(row[1], "ats:ashby:acme")
             con = sqlite3.connect(root / "ledger" / "hiddenjob.sqlite3")
             self.assertTrue(con.execute("SELECT evidence_path FROM jobs").fetchone()[0].endswith(".json"))
+
+
+RANK_SPEC = importlib.util.spec_from_file_location("hiddenjob_rank", Path(__file__).parents[1] / "tools" / "hiddenjob_rank.py")
+ranker = importlib.util.module_from_spec(RANK_SPEC)
+RANK_SPEC.loader.exec_module(ranker)
+
+
+class RankerGateTests(unittest.TestCase):
+    """Regression gates for ranker false positives triaged 2026-09-26."""
+
+    def tier(self, title, company="Acme", desc="", loc="", classification="unclassified"):
+        return ranker.classify(title, company, desc, loc, classification)["tier"]
+
+    def test_new_grad_pipeline_excluded(self):
+        self.assertEqual(
+            self.tier("Associate Product Manager, New Grad (2027 Start)", "Databricks"),
+            "excluded")
+
+    def test_intern_title_excluded(self):
+        self.assertEqual(
+            self.tier("Associate Product Manager Intern", "Coinbase"),
+            "excluded")
+
+    def test_europe_locked_role_excluded(self):
+        self.assertEqual(
+            self.tier("Solutions Engineer, Europe", "Linear"),
+            "excluded")
+
+    def test_perm_like_classification_never_actionable(self):
+        self.assertEqual(
+            self.tier("Lead Product Manager (Multiple Positions) [REF LPM-B-102-CARC]",
+                      "jobs.now", classification="perm-like"),
+            "excluded")
+
+    def test_senior_tpm_out_of_band(self):
+        self.assertEqual(
+            self.tier("Senior Technical Program Manager - Security", "OpenAI"),
+            "excluded")
+
+    def test_us_posting_mentioning_europe_in_description_not_excluded(self):
+        self.assertNotEqual(
+            self.tier("Product Support Specialist",
+                      desc="Support our customers across the US and Europe.",
+                      loc="San Francisco, CA"),
+            "excluded")
+
+    def test_qualified_posting_stays_actionable(self):
+        self.assertEqual(
+            self.tier("Product Support Specialist",
+                      desc="Provide technical support for our SaaS platform via Zendesk.",
+                      loc="Remote, United States"),
+            "actionable")
