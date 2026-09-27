@@ -231,9 +231,31 @@ class RankerGateTests(unittest.TestCase):
             self.tier("Solutions Engineer, Europe", "Linear"),
             "excluded")
 
-    def test_perm_like_classification_never_actionable(self):
+    def test_perm_like_classification_surfaced_as_compliance_lead(self):
+        # Compliance-channel notices are the discovery target: surfaced, never excluded.
         self.assertEqual(
             self.tier("Lead Product Manager (Multiple Positions) [REF LPM-B-102-CARC]",
+                      "jobs.now", classification="perm-like"),
+            "compliance-lead")
+
+    def test_lca_and_recruitment_notice_also_surfaced(self):
+        self.assertEqual(
+            self.tier("Software Engineer", "jobs.now", classification="lca-like"),
+            "compliance-lead")
+        self.assertEqual(
+            self.tier("Support Specialist", "jobs.now",
+                      classification="recruitment-notice-like"),
+            "compliance-lead")
+
+    def test_notice_failing_fit_gate_stays_excluded(self):
+        # The notice tier changes visibility, not fit: a Spanish-required or
+        # out-of-band notice is still excluded for the person.
+        self.assertEqual(
+            self.tier("Customer Support Specialist - Spanish Required [REF 123]",
+                      "jobs.now", classification="perm-like"),
+            "excluded")
+        self.assertEqual(
+            self.tier("Senior Technical Program Manager [REF 456]",
                       "jobs.now", classification="perm-like"),
             "excluded")
 

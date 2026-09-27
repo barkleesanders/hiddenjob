@@ -14,6 +14,11 @@ Qualification model (improved 2026-09-25):
 - Hard-exclude Spanish-fluency-required roles (Barklee is not fluent).
 - Hard-exclude internships/unpaid roles and active-clearance-required roles.
 - Watch tier: plausible-but-risky (relocation-only on-site, senior-leaning).
+- Compliance-lead tier: perm-like / lca-like / recruitment-notice-like
+  postings are the system's core discovery target — employers satisfy
+  recruitment compliance through these low-visibility channels, so the
+  notice is surfaced, never excluded. Resolve each to a live employer
+  application before staging; never apply to the notice text itself.
 """
 import json
 import re
@@ -92,9 +97,12 @@ EUROPE_LOCKED = [
     r"\bpoland\b", r"\bportugal\b", r"\bbelgium\b", r"\baustria\b", r"\bswitzerland\b",
     r"\baustralia\b", r"\bnew zealand\b",
 ]
-# Visa-compliance notice classifications are not reliably open roles: a PERM or
-# LCA notice can describe a position already being filled (SKILL.md). Never
-# actionable; kept visible as excluded so a human can still review.
+# Visa-compliance notice classifications (perm-like, lca-like,
+# recruitment-notice-like) are the system's core discovery target: employers use
+# these low-visibility channels to satisfy recruitment compliance while the real
+# role stays hard to find. They are SURFACED as their own tier, never excluded.
+# Fit gates (Spanish, intern, seniority, location) still apply to the person;
+# the notice classification only changes the tier, not the fit.
 NOTICE_CLASSIFICATIONS = {"perm-like", "lca-like", "recruitment-notice-like"}
 HARD_EXCLUDE = [
     # Spanish fluency (Barklee is not fluent — 2026-09-25)
@@ -153,10 +161,8 @@ def classify(title, company, description, loc_text="", classification=""):
     d = re.sub(r"[\u2010\u2011\u2012\u2013\u2014\u2212]", "-", d)
     text = f"{t} {d}"
     loc = f"{t} {loc_text}".lower()
-    # Visa-compliance notices are not reliably open roles.
-    if (classification or "").strip().lower() in NOTICE_CLASSIFICATIONS:
-        return {"tier": "excluded", "score": 0, "role_fit": 0,
-                "reason": "visa-notice-not-open-role"}
+    # Compliance-channel notice? Surfaces as its own tier below (after fit gates).
+    is_notice = (classification or "").strip().lower() in NOTICE_CLASSIFICATIONS
     # Student / new-grad pipelines never fit, title-scoped.
     for pat in TITLE_HARD_EXCLUDE:
         if re.search(pat, t):
@@ -210,6 +216,13 @@ def classify(title, company, description, loc_text="", classification=""):
     anchored = re.search(r"\b(hybrid|on[- ]site|in[- ]office|in[- ]person)\b", text)
     if anchored and re.search(NON_SF_US_METRO, loc) and not sf_ok:
         watch_flags.append("onsite-outside-sf")
+    # Compliance-channel notices are surfaced on their own tier: the notice is
+    # itself the discovery signal, so they bypass the role-fit floor — but they
+    # still had to pass every fit gate above. Resolve each to a live employer
+    # application before staging; never apply to the notice text itself.
+    if is_notice:
+        return {"tier": "compliance-lead", "score": total, "role_fit": role_fit,
+                "reason": "visa-notice-lead" + (";" + ";".join(watch_flags) if watch_flags else "")}
     # Qualification gates: role fit in the title is mandatory for actionable.
     if role_fit < ROLE_FIT_MIN:
         return {"tier": "watch" if (watch_flags or total >= ACTIONABLE_MIN) else "excluded",
@@ -249,8 +262,9 @@ def main():
         out.append({"tier": c["tier"], "score": c["score"], "role_fit": c["role_fit"],
                     "url": r["url"], "company": r["company"], "title": r["title"],
                     "source": r["source"], "date_posted": r["date_posted"],
-                    "reason": c["reason"]})
-    out.sort(key=lambda x: ({"actionable": 0, "watch": 1, "excluded": 2}[x["tier"]], -x["score"]))
+                    "classification": r["classification"], "reason": c["reason"]})
+    out.sort(key=lambda x: ({"actionable": 0, "compliance-lead": 1, "watch": 2,
+                             "excluded": 3}[x["tier"]], -x["score"]))
     print(json.dumps(out[:80], indent=2))
 
 if __name__ == "__main__":
