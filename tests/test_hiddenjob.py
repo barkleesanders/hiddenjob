@@ -298,3 +298,36 @@ class RankerGateTests(unittest.TestCase):
                       desc="Provide technical support for our SaaS platform via Zendesk.",
                       loc="Remote, United States"),
             "actionable")
+
+
+class HackerNewsTests(unittest.TestCase):
+    def test_company_parsed_from_hiring_title(self):
+        with mock.patch.object(hiddenjob, "fetch_json") as fj:
+            fj.side_effect = [
+                [123, 456],
+                {"type": "job", "id": 123, "title": "Stable (YC W20) Is Hiring Product Engineers",
+                 "url": "https://example.com/careers", "time": 1790274558, "text": "Join us."},
+                {"type": "job", "id": 456, "title": "Acme Hiring Designer",
+                 "url": "", "time": 1790274558},
+            ]
+            records = hiddenjob.hackernews_jobs(limit=2)
+        self.assertEqual(len(records), 2)
+        self.assertEqual(records[0]["company"], "Stable")
+        self.assertEqual(records[0]["source"], "hackernews")
+        self.assertTrue(records[0]["url"].startswith("https://example.com"))
+        self.assertEqual(records[1]["company"], "Acme")
+        # Empty URL falls back to the HN item permalink.
+        self.assertIn("news.ycombinator.com/item?id=456", records[1]["url"])
+
+    def test_non_job_items_skipped(self):
+        with mock.patch.object(hiddenjob, "fetch_json") as fj:
+            fj.side_effect = [
+                [123],
+                {"type": "story", "id": 123, "title": "Not a job"},
+            ]
+            records = hiddenjob.hackernews_jobs(limit=1)
+        self.assertEqual(records, [])
+
+    def test_api_failure_returns_empty(self):
+        with mock.patch.object(hiddenjob, "fetch_json", side_effect=hiddenjob.FetchBlocked("down")):
+            self.assertEqual(hiddenjob.hackernews_jobs(limit=5), [])

@@ -112,6 +112,58 @@ def fetch_json(url: str, timeout: int = 25) -> object:
         raise FetchBlocked(f"{url}: {exc}") from exc
 
 
+def hackernews_jobs(limit: int = 50, timeout: int = 25) -> list[dict[str, object]]:
+    """Fetch job postings from Hacker News via the public Firebase API.
+
+    Uses only the official HN API (no page scraping). Returns job records in
+    the same shape as extract_job() so they flow through the normal
+    store/classify/rank pipeline. Company is parsed from the title prefix
+    (e.g. "Stable (YC W20) Is Hiring..." -> "Stable").
+    """
+    try:
+        ids = fetch_json("https://hacker-news.firebaseio.com/v0/jobstories.json", timeout=timeout)
+    except FetchBlocked as exc:
+        print(f"hackernews: {exc}", file=sys.stderr)
+        return []
+    if not isinstance(ids, list):
+        return []
+    records: list[dict[str, object]] = []
+    for job_id in ids[:limit]:
+        try:
+            item = fetch_json(f"https://hacker-news.firebaseio.com/v0/item/{job_id}.json", timeout=timeout)
+        except FetchBlocked:
+            continue
+        if not isinstance(item, dict) or item.get("type") != "job":
+            continue
+        title = str(item.get("title") or "Untitled posting")
+        # Company is typically the text before " is hiring" / " hiring" / " (".
+        company = ""
+        m = re.match(r"^(.+?)\s+(?:is\s+)?hiring\b", title, re.I)
+        if m:
+            company = re.sub(r"\s*\(.*?\)\s*$", "", m.group(1)).strip()
+        url = str(item.get("url") or f"https://news.ycombinator.com/item?id={job_id}")
+        text = str(item.get("text") or "")
+        description = clean_text(f"{title}\n{text}") if text else clean_text(title)
+        posted = item.get("time")
+        date_posted = ""
+        if isinstance(posted, (int, float)):
+            try:
+                date_posted = datetime.fromtimestamp(posted, UTC).isoformat()
+            except (ValueError, OSError):
+                pass
+        records.append({
+            "url": url,
+            "source": "hackernews",
+            "title": title[:300],
+            "company": company[:300],
+            "date_posted": date_posted,
+            "description": description,
+            "description_sha256": hashlib.sha256(description.encode()).hexdigest(),
+            **classify(description),
+        })
+    return records
+
+
 def ats_board_postings(kind: str, board: str, company: str, timeout: int = 15) -> list[dict[str, object]]:
     """Fetch public postings from a supported ATS job board.
 
@@ -470,6 +522,16 @@ def cmd_sync(args: argparse.Namespace) -> int:
         if not isinstance(source, dict) or not isinstance(source.get("name"), str) or not source["name"].strip():
             raise SystemExit("Every source needs a non-empty name.")
         name = str(source["name"])
+        # API-based sources (e.g. Hacker News) bypass the sitemap pipeline.
+        if source.get("kind") == "hackernews":
+            hn_limit = int(source.get("limit") or args.limit or 50)
+            records = hackernews_jobs(limit=hn_limit)
+            for record in records:
+                record["evidence_text"] = record.get("description", "")
+                store_job(con, root, record)
+            con.commit()
+            print(f"{name}: api=hackernews, captured={len(records)}")
+            continue
         direct_urls = source_direct_urls(source, cfg_path)
         seeds = source_sitemap_seeds(source, cfg_path)
         blocked: list[str] = []

@@ -8,6 +8,11 @@
       "sitemap_fallback": "https://www.jobs.now/sitemap.xml",
       "job_url_pattern": "/jobs/",
       "job_url_regex": "^/jobs/\\d+(?:[-/]|$)"
+    },
+    {
+      "name": "hackernews",
+      "kind": "hackernews",
+      "limit": 50
     }
   ],
   "company_hosts": [
