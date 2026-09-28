@@ -12,6 +12,7 @@ import argparse
 import hashlib
 import html
 import json
+import os
 import re
 import sqlite3
 import subprocess
@@ -24,6 +25,10 @@ from pathlib import Path
 from xml.etree import ElementTree
 
 UA = "Hiddenjob/0.1 (research-and-review)"
+# RemoteOK challenges non-browser User-Agents; their API terms also require a
+# follow (non-nofollow) link-back attribution wherever their data is shown.
+BROWSER_UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
+              "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 PERM_MARKERS = [
     (r"\bforeign\s+equivalent\b", 3),
     (r"\bin the job offered\b", 3),
@@ -99,8 +104,8 @@ def fetch(url: str, timeout: int = 25) -> tuple[str, str]:
     return body, final_url
 
 
-def fetch_json(url: str, timeout: int = 25) -> object:
-    req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept": "application/json"})
+def fetch_json(url: str, timeout: int = 25, user_agent: str | None = None) -> object:
+    req = urllib.request.Request(url, headers={"User-Agent": user_agent or UA, "Accept": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as response:
             if response.status != 200:
@@ -164,6 +169,171 @@ def hackernews_jobs(limit: int = 50, timeout: int = 25) -> list[dict[str, object
     return records
 
 
+def remoteok_jobs(limit: int = 100, timeout: int = 25) -> list[dict[str, object]]:
+    """Fetch remote postings from the RemoteOK public API.
+
+    Keyless JSON feed; requires a browser-like User-Agent (bot UAs are
+    challenged). Element 0 of the response is a legal/terms notice, not a
+    job — records are identified by the presence of a "position" key.
+    Attribution: RemoteOK's API terms require a follow (non-nofollow)
+    link-back to remoteok.com wherever their data is displayed.
+    """
+    try:
+        data = fetch_json("https://remoteok.com/api", timeout=timeout, user_agent=BROWSER_UA)
+    except FetchBlocked as exc:
+        print(f"remoteok: {exc}", file=sys.stderr)
+        return []
+    if not isinstance(data, list):
+        return []
+    records: list[dict[str, object]] = []
+    for job in data:
+        if not isinstance(job, dict) or "position" not in job:
+            continue
+        title = str(job.get("position") or "Untitled posting")
+        description = clean_text(str(job.get("description") or ""))
+        records.append({
+            "url": str(job.get("url") or ""),
+            "source": "remoteok",
+            "title": title[:300],
+            "company": str(job.get("company") or "").strip()[:300],
+            "date_posted": str(job.get("date") or ""),
+            "description": description,
+            "description_sha256": hashlib.sha256(description.encode()).hexdigest(),
+            **classify(description),
+        })
+        if len(records) >= limit:
+            break
+    return records
+
+
+def remotive_jobs(limit: int = 100, timeout: int = 25) -> list[dict[str, object]]:
+    """Fetch remote postings from the Remotive public API (keyless JSON)."""
+    try:
+        data = fetch_json(f"https://remotive.com/api/remote-jobs?limit={limit}", timeout=timeout)
+    except FetchBlocked as exc:
+        print(f"remotive: {exc}", file=sys.stderr)
+        return []
+    jobs = data.get("jobs", []) if isinstance(data, dict) else []
+    records: list[dict[str, object]] = []
+    for job in jobs:
+        if not isinstance(job, dict):
+            continue
+        title = str(job.get("title") or "Untitled posting")
+        description = clean_text(str(job.get("description") or ""))
+        records.append({
+            "url": str(job.get("url") or ""),
+            "source": "remotive",
+            "title": title[:300],
+            "company": str(job.get("company_name") or "").strip()[:300],
+            "date_posted": str(job.get("publication_date") or ""),
+            "description": description,
+            "description_sha256": hashlib.sha256(description.encode()).hexdigest(),
+            **classify(description),
+        })
+    return records[:limit]
+
+
+def arbeitnow_jobs(limit: int = 100, timeout: int = 25) -> list[dict[str, object]]:
+    """Fetch postings from the Arbeitnow public API (keyless JSON).
+
+    Supplemental source: heavily German/EU-leaning. Their terms ask for a
+    link-back to arbeitnow.com; jobs refresh hourly ordered by created_at.
+    """
+    try:
+        data = fetch_json("https://www.arbeitnow.com/api/job-board-api", timeout=timeout)
+    except FetchBlocked as exc:
+        print(f"arbeitnow: {exc}", file=sys.stderr)
+        return []
+    jobs = data.get("data", []) if isinstance(data, dict) else []
+    records: list[dict[str, object]] = []
+    for job in jobs:
+        if not isinstance(job, dict):
+            continue
+        title = str(job.get("title") or "Untitled posting")
+        description = clean_text(str(job.get("description") or ""))
+        created = job.get("created_at")
+        date_posted = ""
+        if isinstance(created, (int, float)):
+            try:
+                date_posted = datetime.fromtimestamp(created, UTC).isoformat()
+            except (ValueError, OSError):
+                pass
+        records.append({
+            "url": str(job.get("url") or ""),
+            "source": "arbeitnow",
+            "title": title[:300],
+            "company": str(job.get("company_name") or "").strip()[:300],
+            "date_posted": date_posted,
+            "description": description,
+            "description_sha256": hashlib.sha256(description.encode()).hexdigest(),
+            **classify(description),
+        })
+        if len(records) >= limit:
+            break
+    return records
+
+
+def usajobs_jobs(limit: int = 50, timeout: int = 25, api_key: str = "", keyword: str = "") -> list[dict[str, object]]:
+    """Fetch federal postings from the USAJOBS search API.
+
+    Requires a free API key (https://api.data.gov/signup/ — USAJOBS accepts
+    api.data.gov keys). The key is never hardcoded; pass it in or set the env
+    var named by the source's api_key_env. Without a key, returns [].
+    Shape is defensive: SearchResult.SearchResultItems[].MatchedObjectDescriptor.
+    """
+    if not api_key:
+        return []
+    params = {"ResultsPerPage": max(1, min(limit, 500)), "Fields": "full"}
+    if keyword:
+        params["Keyword"] = keyword
+    url = "https://data.usajobs.gov/api/search?" + urllib.parse.urlencode(params)
+    req = urllib.request.Request(url, headers={
+        "Host": "data.usajobs.gov",
+        "User-Agent": UA,
+        "Authorization-Key": api_key,
+        "Accept": "application/json",
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as response:
+            if response.status != 200:
+                raise FetchBlocked(f"usajobs: HTTP {response.status}")
+            data = json.loads(response.read().decode("utf-8", "replace"))
+    except urllib.error.HTTPError as exc:
+        print(f"usajobs: HTTP {exc.code}", file=sys.stderr)
+        return []
+    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+        print(f"usajobs: {exc}", file=sys.stderr)
+        return []
+    items = []
+    if isinstance(data, dict):
+        sr = data.get("SearchResult") or {}
+        items = sr.get("SearchResultItems", []) if isinstance(sr, dict) else []
+    records: list[dict[str, object]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        d = item.get("MatchedObjectDescriptor")
+        if not isinstance(d, dict):
+            continue
+        title = str(d.get("PositionTitle") or "Untitled posting")
+        summary = d.get("JobSummary") or ""
+        if not summary and isinstance(d.get("UserArea"), dict):
+            summary = ((d["UserArea"].get("Details") or {}).get("JobSummary") or "")
+        description = clean_text(str(summary))
+        org = d.get("OrganizationName") or ""
+        records.append({
+            "url": str(d.get("PositionURI") or ""),
+            "source": "usajobs",
+            "title": title[:300],
+            "company": str(org).strip()[:300],
+            "date_posted": str(d.get("PublicationStartDate") or ""),
+            "description": description,
+            "description_sha256": hashlib.sha256(description.encode()).hexdigest(),
+            **classify(description),
+        })
+    return records[:limit]
+
+
 def ats_board_postings(kind: str, board: str, company: str, timeout: int = 15) -> list[dict[str, object]]:
     """Fetch public postings from a supported ATS job board.
 
@@ -215,6 +385,83 @@ def ats_board_postings(kind: str, board: str, company: str, timeout: int = 15) -
                 "date_posted": datetime.fromtimestamp(created / 1000, UTC).isoformat(timespec="seconds") if isinstance(created, (int, float)) else "",
                 "description": clean_text(str(job.get("description") or job.get("descriptionPlain") or "")),
                 "evidence_text": json.dumps(job, indent=2),
+            })
+    elif kind == "smartrecruiters":
+        # Public postings endpoint (keyless). Listing omits full descriptions,
+        # so description is synthesized from title/location/department; the
+        # public job page follows the verified pattern
+        # https://jobs.smartrecruiters.com/{company-identifier}/{uuid}.
+        data = fetch_json(f"https://api.smartrecruiters.com/v1/companies/{board}/postings?limit=100", timeout=timeout)
+        content = data.get("content", []) if isinstance(data, dict) else []
+        for job in content:
+            if not isinstance(job, dict):
+                continue
+            loc = job.get("location")
+            location = str(loc.get("fullLocation") or "") if isinstance(loc, dict) else ""
+            dept = job.get("department")
+            department = str(dept.get("label") or "") if isinstance(dept, dict) else ""
+            uuid = str(job.get("uuid") or "")
+            ident = str((job.get("company") or {}).get("identifier") or board) if isinstance(job.get("company"), dict) else board
+            title = str(job.get("name") or "")
+            description = clean_text(" | ".join(p for p in [title, department, location] if p))
+            postings.append({
+                "url": f"https://jobs.smartrecruiters.com/{ident}/{uuid}" if uuid else "",
+                "title": title,
+                "company": company or ident,
+                "date_posted": str(job.get("releasedDate") or ""),
+                "description": description,
+                "evidence_text": json.dumps(job, indent=2),
+            })
+    elif kind == "workable":
+        # Public widget API (keyless). Widget listings omit descriptions, so
+        # description is synthesized from title/location/department.
+        data = fetch_json(f"https://apply.workable.com/api/v1/widget/accounts/{board}", timeout=timeout)
+        jobs = data.get("jobs", []) if isinstance(data, dict) else []
+        for job in jobs:
+            if not isinstance(job, dict):
+                continue
+            locs = job.get("locations") or []
+            location = ""
+            if isinstance(locs, list) and locs and isinstance(locs[0], dict):
+                first = locs[0]
+                location = ", ".join(p for p in [str(first.get("city") or ""), str(first.get("country") or "")] if p)
+            title = str(job.get("title") or "")
+            department = str(job.get("department") or "")
+            description = clean_text(" | ".join(p for p in [title, department, location] if p))
+            postings.append({
+                "url": str(job.get("url") or ""),
+                "title": title,
+                "company": company,
+                "date_posted": str(job.get("published_on") or ""),
+                "description": description,
+                "evidence_text": json.dumps(job, indent=2),
+            })
+    elif kind == "personio":
+        # Public XML feed (keyless). ElementTree is already imported.
+        # Public job page pattern (verified): https://{board}.jobs.personio.com/job/{id}
+        body, _ = fetch(f"https://{board}.jobs.personio.com/xml?language=en", timeout=timeout)
+        try:
+            root = ElementTree.fromstring(body)
+        except ElementTree.ParseError as exc:
+            raise FetchBlocked(f"personio:{board}: bad XML: {exc}") from exc
+        for pos in root.iter("position"):
+            def _text(el, tag):
+                child = el.find(tag)
+                return str(child.text or "").strip() if child is not None else ""
+            pid = _text(pos, "id")
+            title = _text(pos, "name") or "Untitled posting"
+            office = _text(pos, "office")
+            department = _text(pos, "department")
+            jd = pos.find("jobDescriptions")
+            jd_text = " ".join((n.text or "") for n in jd.iter()) if jd is not None else ""
+            description = clean_text(" | ".join(p for p in [title, department, office] if p) + "\n" + jd_text)
+            postings.append({
+                "url": f"https://{board}.jobs.personio.com/job/{pid}" if pid else "",
+                "title": title,
+                "company": company or _text(pos, "subcompany"),
+                "date_posted": _text(pos, "createdAt"),
+                "description": description,
+                "evidence_text": ElementTree.tostring(pos, encoding="unicode"),
             })
     else:
         raise FetchBlocked(f"unsupported ATS board kind: {kind}")
@@ -522,15 +769,40 @@ def cmd_sync(args: argparse.Namespace) -> int:
         if not isinstance(source, dict) or not isinstance(source.get("name"), str) or not source["name"].strip():
             raise SystemExit("Every source needs a non-empty name.")
         name = str(source["name"])
-        # API-based sources (e.g. Hacker News) bypass the sitemap pipeline.
-        if source.get("kind") == "hackernews":
-            hn_limit = int(source.get("limit") or args.limit or 50)
-            records = hackernews_jobs(limit=hn_limit)
+        # API-based sources bypass the sitemap pipeline. Each fetcher returns
+        # records in extract_job()'s shape so they flow through the normal
+        # store/classify/rank pipeline.
+        feed_fetchers = {
+            "hackernews": hackernews_jobs,
+            "remoteok": remoteok_jobs,
+            "remotive": remotive_jobs,
+            "arbeitnow": arbeitnow_jobs,
+        }
+        kind = str(source.get("kind") or "")
+        if kind in feed_fetchers:
+            feed_limit = int(source.get("limit") or args.limit or 50)
+            records = feed_fetchers[kind](limit=feed_limit)
             for record in records:
                 record["evidence_text"] = record.get("description", "")
                 store_job(con, root, record)
             con.commit()
-            print(f"{name}: api=hackernews, captured={len(records)}")
+            print(f"{name}: api={kind}, captured={len(records)}")
+            continue
+        if kind == "usajobs":
+            # USAJOBS needs a free API key (https://api.data.gov/signup/).
+            # Read from the env var named by api_key_env; never hardcoded.
+            env_name = str(source.get("api_key_env") or "USAJOBS_API_KEY")
+            api_key = os.environ.get(env_name, "")
+            if not api_key:
+                print(f"{name}: no USAJOBS API key in ${env_name}; skipping source, preserving existing rows.", file=sys.stderr)
+                continue
+            uj_limit = int(source.get("limit") or args.limit or 50)
+            records = usajobs_jobs(limit=uj_limit, api_key=api_key, keyword=str(source.get("keyword") or ""))
+            for record in records:
+                record["evidence_text"] = record.get("description", "")
+                store_job(con, root, record)
+            con.commit()
+            print(f"{name}: api=usajobs, captured={len(records)}")
             continue
         direct_urls = source_direct_urls(source, cfg_path)
         seeds = source_sitemap_seeds(source, cfg_path)

@@ -89,11 +89,27 @@ The public [starter registry](config/hiddenjobs-targets.example.json) contains t
 
 Set `"ats_targets_file": "hiddenjobs-targets.json"` in `config/targets.json` (after copying the example registry to that ignored local file) and `sync` will also pull every registry entry's public ATS board:
 
-- Supported board kinds: `greenhouse` (`boards-api.greenhouse.io`), `ashby` (`api.ashbyhq.com/posting-api`), `lever` (`api.lever.co`). One HTTP call per board; the JSON response is saved as evidence per posting.
+- Supported board kinds: `greenhouse` (`boards-api.greenhouse.io`), `ashby` (`api.ashbyhq.com/posting-api`), `lever` (`api.lever.co`), `smartrecruiters` (`api.smartrecruiters.com`), `workable` (`apply.workable.com/api/v1/widget`), `personio` (`{company}.jobs.personio.com/xml`). One HTTP call per board; the JSON/XML response is saved as evidence per posting. SmartRecruiters and Workable listing endpoints omit full descriptions, so those records carry title/location/department text and link to the live posting.
 - Entries with `enabled: false`, a missing `kind`/`board`, or an unsupported kind are skipped with a stderr note — never silently and never treated as "no jobs".
 - Board slugs must be verified before they are added: probe the board's public API and keep only entries that return HTTP 200 with real postings.
 
 Entries under `company_hosts` with `"enabled": true` are walked through that host's own `robots.txt`/sitemap with a bounded budget (`--max-host-sitemap-urls`, default 400), preferring career child maps and filtering URLs to job/career/position/opening paths. Hosts default to disabled; enable only hosts whose sitemaps are publisher-declared and measurable.
+
+## Feed sources (no sitemap needed)
+
+These `kind:` entries under `sources` pull from public job APIs instead of sitemaps:
+
+- `hackernews` — Hacker News job stories via the public Firebase API.
+- `remoteok` — RemoteOK's public API (startup/tech-heavy remote board; needs a browser-like User-Agent, handled internally). Their API terms require a follow (non-nofollow) link-back to remoteok.com wherever their data is displayed.
+- `remotive` — Remotive's public API (hand-curated remote board).
+- `arbeitnow` — Arbeitnow's public API (supplemental; heavily German/EU-leaning; they ask for a link-back).
+- `usajobs` — USAJOBS federal search API. Requires a free API key: sign up at https://api.data.gov/signup/ (USAJOBS accepts api.data.gov keys), then export it before syncing:
+
+```bash
+export USAJOBS_API_KEY="your-key-here"
+```
+
+The key is read from the env var named by the source's `api_key_env` (default `USAJOBS_API_KEY`) and is never written to the repo. Without a key the source is skipped with a stderr note. Optionally set `"keyword"` on the source to filter (e.g. `"keyword": "product manager"`).
 
 ## Evidence states
 

@@ -13,6 +13,28 @@
       "name": "hackernews",
       "kind": "hackernews",
       "limit": 50
+    },
+    {
+      "name": "remoteok",
+      "kind": "remoteok",
+      "limit": 100
+    },
+    {
+      "name": "remotive",
+      "kind": "remotive",
+      "limit": 100
+    },
+    {
+      "name": "arbeitnow",
+      "kind": "arbeitnow",
+      "limit": 100
+    },
+    {
+      "name": "usajobs",
+      "kind": "usajobs",
+      "api_key_env": "USAJOBS_API_KEY",
+      "keyword": "",
+      "limit": 50
     }
   ],
   "company_hosts": [

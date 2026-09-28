@@ -331,3 +331,139 @@ class HackerNewsTests(unittest.TestCase):
     def test_api_failure_returns_empty(self):
         with mock.patch.object(hiddenjob, "fetch_json", side_effect=hiddenjob.FetchBlocked("down")):
             self.assertEqual(hiddenjob.hackernews_jobs(limit=5), [])
+
+
+class FeedSourceTests(unittest.TestCase):
+    def test_remoteok_skips_legal_notice(self):
+        payload = [
+            {"legal": "API Terms of Service: link back to remoteok.com"},
+            {"position": "Backend Engineer", "company": "Acme ",
+             "url": "https://remoteok.com/remote-jobs/123",
+             "date": "2026-09-26T16:00:26+00:00",
+             "description": "<p>Build things.</p>"},
+            {"slug": "not-a-job"},
+        ]
+        with mock.patch.object(hiddenjob, "fetch_json", return_value=payload) as fj:
+            records = hiddenjob.remoteok_jobs(limit=10)
+        fj.assert_called_once()
+        self.assertIn("remoteok.com/api", fj.call_args[0][0])
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["title"], "Backend Engineer")
+        self.assertEqual(records[0]["company"], "Acme")
+        self.assertEqual(records[0]["source"], "remoteok")
+        self.assertNotIn("<p>", records[0]["description"])
+
+    def test_remoteok_failure_returns_empty(self):
+        with mock.patch.object(hiddenjob, "fetch_json", side_effect=hiddenjob.FetchBlocked("down")):
+            self.assertEqual(hiddenjob.remoteok_jobs(limit=5), [])
+
+    def test_remotive_records(self):
+        payload = {"jobs": [
+            {"title": "Content Reviewer", "company_name": "TELUS Digital",
+             "url": "https://remotive.com/remote-jobs/x-1",
+             "publication_date": "2026-09-21T12:55:11",
+             "description": "<p>Review content.</p>"},
+            "not-a-dict",
+        ]}
+        with mock.patch.object(hiddenjob, "fetch_json", return_value=payload):
+            records = hiddenjob.remotive_jobs(limit=10)
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["company"], "TELUS Digital")
+        self.assertEqual(records[0]["date_posted"], "2026-09-21T12:55:11")
+        self.assertEqual(records[0]["source"], "remotive")
+
+    def test_arbeitnow_epoch_date(self):
+        payload = {"data": [
+            {"title": "Designer", "company_name": "Studio X",
+             "url": "https://www.arbeitnow.com/jobs/x-1",
+             "location": "Berlin", "created_at": 1790553635,
+             "description": "Design things."},
+        ]}
+        with mock.patch.object(hiddenjob, "fetch_json", return_value=payload):
+            records = hiddenjob.arbeitnow_jobs(limit=10)
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["company"], "Studio X")
+        self.assertTrue(records[0]["date_posted"].startswith("2026-"))
+        self.assertEqual(records[0]["source"], "arbeitnow")
+
+    def test_usajobs_requires_key(self):
+        self.assertEqual(hiddenjob.usajobs_jobs(limit=5, api_key=""), [])
+
+    def test_usajobs_parses_search_result(self):
+        body = json.dumps({"SearchResult": {"SearchResultItems": [
+            {"MatchedObjectDescriptor": {
+                "PositionTitle": "IT Specialist",
+                "OrganizationName": "Department of Testing",
+                "PositionURI": "https://www.usajobs.gov/job/123",
+                "PublicationStartDate": "2026-09-20",
+                "JobSummary": "Do IT things."}},
+            {"MatchedObjectDescriptor": "not-a-dict"},
+            "not-a-dict",
+        ]}}).encode()
+        resp = mock.MagicMock()
+        resp.status = 200
+        resp.read.return_value = body
+        ctx = mock.MagicMock()
+        ctx.__enter__.return_value = resp
+        with mock.patch.object(hiddenjob.urllib.request, "urlopen", return_value=ctx) as uo:
+            records = hiddenjob.usajobs_jobs(limit=10, api_key="k", keyword="IT")
+        called_url = uo.call_args[0][0].full_url
+        self.assertIn("data.usajobs.gov/api/search", called_url)
+        self.assertIn("Keyword=IT", called_url)
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["title"], "IT Specialist")
+        self.assertEqual(records[0]["company"], "Department of Testing")
+        self.assertEqual(records[0]["source"], "usajobs")
+
+
+class AtsAdapterTests(unittest.TestCase):
+    def test_smartrecruiters_builds_public_url(self):
+        payload = {"content": [{
+            "name": "Lead Artist", "uuid": "abc-123",
+            "company": {"identifier": "NBCUniversal3", "name": "NBCUniversal"},
+            "location": {"fullLocation": "New York, NY"},
+            "department": {"label": "Design"},
+            "releasedDate": "2026-09-26T00:00:04.332Z",
+            "refNumber": "REF1"}]}
+        with mock.patch.object(hiddenjob, "fetch_json", return_value=payload):
+            postings = hiddenjob.ats_board_postings("smartrecruiters", "NBCUniversal3", "NBCUniversal")
+        self.assertEqual(len(postings), 1)
+        self.assertEqual(postings[0]["url"], "https://jobs.smartrecruiters.com/NBCUniversal3/abc-123")
+        self.assertEqual(postings[0]["title"], "Lead Artist")
+        self.assertIn("New York, NY", postings[0]["description"])
+
+    def test_workable_widget_listing(self):
+        payload = {"jobs": [{
+            "title": "Marketing Manager", "url": "https://apply.workable.com/j/ABC123",
+            "shortcode": "ABC123", "published_on": "2026-08-26",
+            "department": "Growth",
+            "locations": [{"city": "", "country": "Serbia"}]}]}
+        with mock.patch.object(hiddenjob, "fetch_json", return_value=payload):
+            postings = hiddenjob.ats_board_postings("workable", "jobrack", "JobRack")
+        self.assertEqual(len(postings), 1)
+        self.assertEqual(postings[0]["url"], "https://apply.workable.com/j/ABC123")
+        self.assertEqual(postings[0]["date_posted"], "2026-08-26")
+        self.assertIn("Serbia", postings[0]["description"])
+
+    def test_personio_xml_feed(self):
+        xml = ('<workzag-jobs><position><id>42</id><subcompany>Acme AG</subcompany>'
+               '<office>Hybrid - Berlin</office><department>Eng</department>'
+               '<name>Backend Engineer</name>'
+               '<jobDescriptions><jobDescription><name>About</name>'
+               '<value><![CDATA[Build APIs.]]></value></jobDescription></jobDescriptions>'
+               '<createdAt>2026-08-19T10:04:22+00:00</createdAt></position></workzag-jobs>')
+        with mock.patch.object(hiddenjob, "fetch", return_value=(xml, "https://x.jobs.personio.com/xml")):
+            postings = hiddenjob.ats_board_postings("personio", "x", "")
+        self.assertEqual(len(postings), 1)
+        self.assertEqual(postings[0]["url"], "https://x.jobs.personio.com/job/42")
+        self.assertEqual(postings[0]["company"], "Acme AG")
+        self.assertIn("Build APIs.", postings[0]["description"])
+
+    def test_personio_bad_xml_blocked(self):
+        with mock.patch.object(hiddenjob, "fetch", return_value=("not xml", "u")):
+            with self.assertRaises(hiddenjob.FetchBlocked):
+                hiddenjob.ats_board_postings("personio", "x", "")
+
+    def test_unsupported_kind_still_refused(self):
+        with self.assertRaises(hiddenjob.FetchBlocked):
+            hiddenjob.ats_board_postings("notarealats", "x", "")

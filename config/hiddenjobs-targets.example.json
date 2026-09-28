@@ -53,6 +53,9 @@
     {"company":"SoFi","hosts":["www.sofi.com"]},
     {"company":"Stripe","hosts":["stripe.com"]},
     {"company":"The Trade Desk","hosts":["www.thetradedesk.com"]},
-    {"company":"Uber","hosts":["www.uber.com"]}
+    {"company":"Uber","hosts":["www.uber.com"]},
+    {"company":"NBCUniversal","hosts":["www.nbcuniversal.com"],"ats":{"kind":"smartrecruiters","board":"NBCUniversal3"}},
+    {"company":"JobRack","hosts":["jobrack.eu"],"ats":{"kind":"workable","board":"jobrack"}},
+    {"company":"deskbird","hosts":["deskbird.com"],"ats":{"kind":"personio","board":"deskbird"}}
   ]
 }
