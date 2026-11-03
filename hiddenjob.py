@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import html
+import http.client
 import json
 import os
 import re
@@ -95,7 +96,7 @@ def fetch(url: str, timeout: int = 25) -> tuple[str, str]:
         if exc.code == 404:
             return "", url
         raise FetchBlocked(f"{url}: HTTP {exc.code}") from exc
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+    except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException) as exc:
         raise FetchBlocked(f"{url}: {exc}") from exc
     lower = body[:8000].lower()
     # Do not treat ordinary page text mentioning CAPTCHA as a block. Detect the
@@ -114,7 +115,7 @@ def fetch_json(url: str, timeout: int = 25, user_agent: str | None = None) -> ob
             return json.loads(response.read().decode("utf-8", "replace"))
     except urllib.error.HTTPError as exc:
         raise FetchBlocked(f"{url}: HTTP {exc.code}") from exc
-    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+    except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException, json.JSONDecodeError) as exc:
         raise FetchBlocked(f"{url}: {exc}") from exc
 
 

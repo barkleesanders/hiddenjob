@@ -6,6 +6,9 @@
 # overwrites the file), live-tests it, and reports. Silent when nothing new.
 # Migrated 2026-10-01 from Mac-mini SSH gog to the VM-native gmail-throttled
 # connector wrapper (Barklee: all Gmail through the normal Gmail connector).
+# 2026-10-31: gog fallback re-added with Barklee's explicit approval after the
+# Oct 28-31 connector egress outage blinded this watch for days. The connector
+# stays PRIMARY; gog engages only when a connector read fails on transport.
 set -uo pipefail
 GT_BIN="$HOME/workspace/tools/gmail-throttled/gmail-throttled"
 AFTER="2026/09/27"
@@ -47,14 +50,83 @@ search_ids() { # $1 = gmail query; prints message ids, one per line
   printf '%s' "$out" | python3 -c "import json,sys; d=json.load(sys.stdin); print('\n'.join(m['id'] for m in d.get('messages',[]) if 'id' in m))" 2>/dev/null
 }
 
-if ! IDS1=$(search_ids "from:accountinfo@usajobs.gov subject:\"Developer API Key\" after:$AFTER"); then
-  echo "READ FAILED: accountinfo search failed (connector/egress issue). Refusing to report NO CHANGE." >&2
+log_info() { printf '%s watch: %s\n' "$(date '+%F %T %Z')" "$1" >> "$WATCH_LOG"; }
+
+# --- gog fallback (2026-10-31) ---------------------------------------------
+# Engages only when the connector read fails on transport. gog returns THREAD
+# ids for search and full thread JSON for reads; message ids are the same
+# Gmail ids the connector path uses, so SEEN bookkeeping is unchanged.
+# MAP_FILE records "msgid threadid" lines for messages found via gog so the
+# read step can fetch the right thread. It is written from inside command
+# substitutions, so it must be a file (shell vars would not survive).
+SSH_MINI="ssh -F /home/hatch/.ssh/mini_ssh_config -o BatchMode=yes -o ConnectTimeout=20 mini"
+MAP_FILE=$(mktemp)
+trap 'rm -f "$MAP_FILE"' EXIT
+ROUTE="connector"
+
+gog_search_tids() { # $1 = gmail query; prints thread ids, one per line
+  local q="$1" out
+  out=$($SSH_MINI "gog -a barkleesanders@gmail.com gmail search \"$q\" --max 10 --json" 2>/dev/null) || return 1
+  [ -z "$out" ] && return 0
+  printf '%s' "$out" | python3 -c "import json,sys; d=json.load(sys.stdin); print('\n'.join(t['id'] for t in d.get('threads',[]) if 'id' in t))" 2>/dev/null
+}
+
+gog_thread_msg_ids() { # $1 = thread id; prints message ids in that thread
+  local tid="$1" out
+  out=$($SSH_MINI "gog -a barkleesanders@gmail.com gmail threads get \"$tid\" --json" 2>/dev/null) || return 1
+  printf '%s' "$out" | python3 -c "import json,sys; d=json.load(sys.stdin); t=d.get('thread') or {}; print('\n'.join(m['id'] for m in t.get('messages',[]) if 'id' in m))" 2>/dev/null
+}
+
+gog_read_section() { # $1 = thread id, $2 = message id; prints that message's dump section
+  local tid="$1" mid="$2" out
+  out=$($SSH_MINI "gog -a barkleesanders@gmail.com gmail threads get \"$tid\"" 2>/dev/null) || return 1
+  printf '%s' "$out" | MID="$mid" python3 -c "
+import os,sys
+mid=os.environ.get('MID','')
+text=sys.stdin.read()
+chunks=text.split('=== Message ')
+for c in chunks[1:]:
+    if mid and mid in c[:60]:
+        print('=== Message '+c); break
+else:
+    print(text)
+" 2>/dev/null
+}
+
+search_ids_route() { # $1 = gmail query; prints message ids; connector first, gog on transport failure
+  local q="$1" ids tids tid mids mid
+  if ids=$(search_ids "$q" 2>/dev/null); then
+    printf '%s' "$ids"
+    return 0
+  fi
+  log_info "connector search failed (q=$q); engaging gog fallback"
+  if ! tids=$(gog_search_tids "$q"); then
+    echo "READ FAILED: both connector and gog fallback failed (q=$q). Refusing to report NO CHANGE." >&2
+    log_fail "both routes failed (q=$q)" ""
+    return 1
+  fi
+  for tid in $tids; do
+    if ! mids=$(gog_thread_msg_ids "$tid"); then
+      echo "READ FAILED: gog fallback could not expand thread $tid. Refusing to report NO CHANGE." >&2
+      log_fail "gog thread expand failed (tid=$tid)" ""
+      return 1
+    fi
+    for mid in $mids; do
+      printf '%s %s\n' "$mid" "$tid" >> "$MAP_FILE"
+      printf '%s\n' "$mid"
+    done
+  done
+}
+
+if ! IDS1=$(search_ids_route "from:accountinfo@usajobs.gov subject:\"Developer API Key\" after:$AFTER"); then
+  echo "READ FAILED: accountinfo search failed on both routes. Refusing to report NO CHANGE." >&2
   exit 1
 fi
-if ! IDS2=$(search_ids "from:vendor-help@usajobs.gov after:$AFTER"); then
-  echo "READ FAILED: vendor-help search failed (connector/egress issue). Refusing to report NO CHANGE." >&2
+if ! IDS2=$(search_ids_route "from:vendor-help@usajobs.gov after:$AFTER"); then
+  echo "READ FAILED: vendor-help search failed on both routes. Refusing to report NO CHANGE." >&2
   exit 1
 fi
+[ -s "$MAP_FILE" ] && ROUTE="gog"
 IDS=$(printf '%s\n%s\n' "$IDS1" "$IDS2" | sort -u)
 [ -z "$IDS" ] && exit 0
 
@@ -70,6 +142,17 @@ done
 UA="${USAJOBS_USER_AGENT:-barkleesanders@gmail.com}"
 
 for id in $NEW; do
+  if [ "$ROUTE" = "gog" ]; then
+    TID=$(awk -v m="$id" '$1==m {print $2}' "$MAP_FILE" | head -1)
+    [ -z "$TID" ] && TID="$id"
+    if ! SECTION=$(gog_read_section "$TID" "$id"); then
+      echo "READ FAILED: gog fallback could not read message $id; leaving it unseen for the next run." >&2
+      log_fail "gog message read failed (id=$id)" ""
+      exit 1
+    fi
+    BODY=$(printf '%s' "$SECTION" | tr -d '\r')
+    SUBJECT=$(printf '%s' "$SECTION" | grep -m1 '^Subject:' | sed 's/^Subject: *//' | head -c 120)
+  else
   errfile=$(mktemp)
   if ! DETAIL=$("$GT_BIN" gmail +read --id "$id" --headers --format json 2>"$errfile"); then
     err=$(head -c 500 "$errfile" | tr '\n' ' ')
@@ -94,6 +177,7 @@ if not t.strip():
     t=re.sub(r'<[^>]+>',' ',d.get('body_html') or '')
 print(t)" 2>/dev/null | tr -d '\r')
   SUBJECT=$(printf '%s' "$DETAIL" | python3 -c "import json,sys; print(json.load(sys.stdin).get('subject',''))" 2>/dev/null | head -c 120)
+  fi
   # Key formats seen: "Your API key is: <key>" or "API key is\n<key>" (own line)
   KEY=$(printf '%s' "$BODY" | grep -oP '(?:[Yy]our API key is|API key is):?\s*\K[A-Za-z0-9]{16,}' | head -1)
   [ -z "$KEY" ] && KEY=$(printf '%s' "$BODY" | grep -oP '^[A-Za-z0-9]{40,50}$' | head -1)
@@ -106,6 +190,9 @@ print(t)" 2>/dev/null | tr -d '\r')
       printf 'export USAJOBS_API_KEY='"'"'%s'"'"'\n' "$KEY" >> "$ENV_FILE"
     fi
     CODE=$(curl -s -m 25 -o /dev/null -w "%{http_code}" -H "User-Agent: $UA" -H "Authorization-Key: $KEY" "https://data.usajobs.gov/api/search?ResultsPerPage=1")
+    if [ "$CODE" = "000" ] && [ "$ROUTE" = "gog" ]; then
+      CODE=$(curl -s -m 25 --proxy http://127.0.0.1:8899 -o /dev/null -w "%{http_code}" -H "User-Agent: $UA" -H "Authorization-Key: $KEY" "https://data.usajobs.gov/api/search?ResultsPerPage=1")
+    fi
     echo "USAJOBS-NEW-KEY keylen=${#KEY} http=$CODE msgid=$id"
   else
     echo "USAJOBS-NEW-MAIL no-key-found msgid=$id subject=$SUBJECT"
